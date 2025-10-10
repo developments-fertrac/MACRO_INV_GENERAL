@@ -12,8 +12,10 @@ from unidecode import unidecode
 import tempfile
 
 # ==== CONFIG ====
-BASE_PATH = Path(r"C:\Users\jperez\Desktop\Tecnologia\Inventario General")
+# BASE_PATH = Path(r"C:\Users\jperez\Desktop\Tecnologia\Inventario General")
 # BASE_PATH = Path(r"C:\MACRO_INVENTARIO_GENERAL")
+BASE_PATH = Path(__file__).resolve().parent  
+
 PASS_INV = "Compras2025"
 PASSWORDS_TRY = ["Compras2025"]  # añade más si algún archivo usa otra clave
 
