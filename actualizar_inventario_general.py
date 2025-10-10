@@ -860,6 +860,74 @@ def main():
         if not cidx:
             log(f"  - Columna no encontrada: {col_name}")
             return
+        
+        # CRÍTICO: Para REFERENCIA, manejar "/" evitando interpretación como fórmula
+        if col_name == "REFERENCIA":
+            # Detectar si hay referencias con "/"
+            has_slash = any("/" in str(v) for v in values if v not in (None, "", np.nan))
+            
+            if has_slash:
+                log(f"  - Detectadas referencias con '/' - aplicando protección...")
+                
+                rng = ws_inv_copia.Range(
+                    ws_inv_copia.Cells(start_data_row, cidx),
+                    ws_inv_copia.Cells(start_data_row + len(values) - 1, cidx)
+                )
+                
+                # SOLUCIÓN DEFINITIVA: Escribir directamente con NumberFormat @ para evitar división
+                # Paso 1: Formato texto
+                rng.NumberFormat = "@"
+                
+                # Paso 2: Escribir valores
+                ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
+                
+                # Paso 3: Convertir a números reales donde sea posible (sin "/" )
+                # y dejar como texto donde haya "/"
+                try:
+                    # Crear array para conversión masiva
+                    converted_values = []
+                    for v in values:
+                        if v in (None, "", np.nan):
+                            converted_values.append([""])
+                        elif "/" in str(v) or not str(v).replace(".", "").replace("-", "").isdigit():
+                            # Mantener como texto (con formato número)
+                            converted_values.append([v])
+                        else:
+                            # Convertir a número real
+                            try:
+                                converted_values.append([float(v)])
+                            except:
+                                converted_values.append([v])
+                    
+                    # Reescribir con valores convertidos
+                    rng.Value = converted_values
+                except Exception as e:
+                    log(f"    Aviso en conversión: {e}")
+                
+                # Paso 4: Aplicar formato número a toda la columna
+                rng.NumberFormat = "0"
+                
+                # Paso 5: ALINEACIÓN - Forzar alineación a la IZQUIERDA para consistencia visual
+                try:
+                    rng.HorizontalAlignment = -4131  # xlLeft
+                except Exception as e:
+                    log(f"    Aviso en alineación: {e}")
+                
+                # Paso 6: Deshabilitar verificación de errores
+                try:
+                    for i in range(1, 8):
+                        try:
+                            rng.Errors.Item(i).Ignore = True
+                        except:
+                            pass
+                    ws_inv_copia.Parent.Application.ErrorCheckingOptions.NumberAsText = False
+                except Exception:
+                    pass
+                
+                log(f"  - Pegada columna: {col_name} (formato número, alineación derecha)")
+                return
+        
+        # Para otras columnas, proceso normal
         ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
         if number_format:
             ws_inv_copia.Columns(cidx).NumberFormat = number_format
