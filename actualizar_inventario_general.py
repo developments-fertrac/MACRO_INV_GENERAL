@@ -39,7 +39,7 @@ SHEET_INV_LISTA  = "INV LISTA PRECIOS"
 HEADER_ROW_INV         = 2
 HEADER_ROW_INV_LISTA   = 1
 HEADER_ROW_VAL         = 9
-HEADER_ROW_MATRIZ      = 1  # Ajustar según el archivo real
+HEADER_ROW_MATRIZ      = 1
 
 # Columnas a limpiar en INVENTARIO COPIA
 COLS_A_LIMPIAR = [
@@ -147,7 +147,7 @@ def com_convert_to_xlsx(path: Path, passwords: list[str] | None = None) -> Path:
     excel.DisplayAlerts = False
     excel.Interactive = False
     excel.EnableEvents = False
-    excel.ScreenUpdating = False  # CRÍTICO para rendimiento
+    excel.ScreenUpdating = False
     
     try: excel.AskToUpdateLinks = False
     except Exception: pass
@@ -372,7 +372,6 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
         
         src = open_as_excel_source(p, PASSWORDS_TRY)
         
-        # Intentar encontrar la hoja "2025"
         xf = pd.ExcelFile(src, engine="openpyxl")
         sheet_found = None
         for sn in xf.sheet_names:
@@ -380,17 +379,14 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
                 sheet_found = sn
                 break
         if not sheet_found:
-            sheet_found = xf.sheet_names[0]  # Primera hoja como último recurso
+            sheet_found = xf.sheet_names[0]
         log(f"  Usando hoja: {sheet_found}")
         
-        # Leer SIN header primero para buscar la fila correcta
         df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
         
-        # Buscar fila que contiene los encabezados correctos
         header_row_idx = None
-        for idx in range(min(20, len(df_raw))):  # Buscar en las primeras 20 filas
+        for idx in range(min(20, len(df_raw))):
             row_values = df_raw.iloc[idx].astype(str).str.lower()
-            # Buscar si la fila contiene "referencia" y "descripcion" o "lista"
             has_ref = any("referencia" in str(v).lower() and "fertrac" in str(v).lower() for v in df_raw.iloc[idx])
             has_desc = any("descripcion" in str(v).lower() and "lista" in str(v).lower() for v in df_raw.iloc[idx])
             
@@ -400,7 +396,6 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
                 break
         
         if header_row_idx is None:
-            # Buscar fila con más valores no vacíos en las primeras 10 filas
             max_non_empty = 0
             for idx in range(min(10, len(df_raw))):
                 non_empty = df_raw.iloc[idx].notna().sum()
@@ -409,19 +404,15 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
                     header_row_idx = idx
             log(f"  Usando fila {header_row_idx + 1} como encabezado (más valores no vacíos)")
         
-        # Leer con el header correcto
         df = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=header_row_idx)
         
-        # Limpiar columnas unnamed y vacías
         df.columns = [str(c).strip() if not str(c).startswith("Unnamed") and str(c) != "nan" else f"_COL_{i}" 
                       for i, c in enumerate(df.columns)]
         
-        log(f"  Columnas encontradas: {list(df.columns)[:10]}...")  # Mostrar primeras 10
+        log(f"  Columnas encontradas: {list(df.columns)[:10]}...")
         
-        # Crear índice normalizado de columnas
         idx = {_norm(c): c for c in df.columns}
         
-        # Buscar columna de REFERENCIA INVENTARIO FERTRAC (columna A según imagen)
         ref_col = None
         for col_name in df.columns:
             col_norm = _norm(col_name)
@@ -429,19 +420,16 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
                 ref_col = col_name
                 break
         
-        # Si no se encuentra por nombre, usar la primera columna con datos válidos
         if not ref_col:
-            for col_name in df.columns[:5]:  # Revisar primeras 5 columnas
+            for col_name in df.columns[:5]:
                 non_null = df[col_name].notna().sum()
-                if non_null > 10:  # Si tiene más de 10 valores
-                    # Verificar si parece una referencia (contiene FP- o números)
+                if non_null > 10:
                     sample = df[col_name].dropna().astype(str).head(5)
                     if any("FP-" in str(v) or str(v).replace("-", "").isdigit() for v in sample):
                         ref_col = col_name
                         log(f"  Usando columna '{col_name}' como REFERENCIA (detectada por patrón)")
                         break
         
-        # Buscar columna de DESCRIPCION LISTA PRECIOS (columna C según imagen)
         desc_col = None
         for col_name in df.columns:
             col_norm = _norm(col_name)
@@ -449,17 +437,15 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
                 desc_col = col_name
                 break
         
-        # Si no se encuentra por nombre, buscar columna con texto descriptivo
         if not desc_col:
             for col_name in df.columns:
                 if col_name == ref_col:
                     continue
                 non_null = df[col_name].notna().sum()
                 if non_null > 10:
-                    # Verificar si parece descripción (texto largo)
                     sample = df[col_name].dropna().astype(str).head(5)
                     avg_len = sum(len(str(v)) for v in sample) / len(sample) if len(sample) > 0 else 0
-                    if avg_len > 15:  # Descripciones suelen ser más largas
+                    if avg_len > 15:
                         desc_col = col_name
                         log(f"  Usando columna '{col_name}' como DESCRIPCION (detectada por longitud)")
                         break
@@ -472,15 +458,12 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
         log(f"  ✓ Columna referencia: {ref_col}")
         log(f"  ✓ Columna descripción: {desc_col}")
         
-        # Filtrar filas válidas
         df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
         
-        # Crear DataFrame de salida
         out = pd.DataFrame()
         out["__REF_MATRIZ__"] = df[ref_col].apply(to_num_str)
         out["__DESC_LISTA__"] = df[desc_col].fillna("")
         
-        # Eliminar duplicados, quedándose con el primero
         out = out.drop_duplicates(subset=["__REF_MATRIZ__"], keep="first")
         
         log(f"  ✓ Matriz USD cargada: {len(out)} referencias")
@@ -504,7 +487,7 @@ def excel_open(path: Path, password: str | None = None):
     excel.DisplayAlerts = False
     excel.Interactive = False
     excel.EnableEvents = False
-    excel.ScreenUpdating = False  # CRÍTICO
+    excel.ScreenUpdating = False
     
     try: excel.AskToUpdateLinks = False
     except Exception: pass
@@ -542,7 +525,6 @@ def excel_open(path: Path, password: str | None = None):
 
     try:
         wb = excel.Workbooks.Open(str(src_path), UpdateLinks=0, ReadOnly=False, IgnoreReadOnlyRecommended=True)
-        # CRÍTICO: Configurar cálculo manual DESPUÉS de abrir el libro
         try:
             excel.Calculation = -4135  # xlCalculationManual
         except Exception as e:
@@ -660,7 +642,6 @@ def ws_fill_column_values(ws, col_idx: int, start_row: int, values: list):
         chunk = values[offset: offset + seg_len]
         chunk = [("" if (v is None or (isinstance(v, float) and np.isnan(v))) else v) for v in chunk]
 
-        # OPTIMIZACIÓN: Escritura en bloque
         rng = ws.Range(ws.Cells(a, col_idx), ws.Cells(a + seg_len - 1, col_idx))
         rng.Value = [[v] for v in chunk]
         offset += seg_len
@@ -680,7 +661,6 @@ def ws_copy_down_formula(ws, col_idx: int, start_row: int, end_row: int):
     if end_row < start_row: return
     fml = ws.Cells(start_row, col_idx).Formula
     if fml:
-        # OPTIMIZACIÓN: Una sola operación de rango
         rng = ws.Range(ws.Cells(start_row, col_idx), ws.Cells(end_row, col_idx))
         rng.Formula = fml
 
@@ -784,22 +764,18 @@ def read_multiple_columns_optimized(ws, start_row: int, end_row: int, col_indice
     if end_row < start_row or not col_indices:
         return {col: [] for col in col_indices}
     
-    # Encontrar rango continuo
     min_col = min(col_indices)
     max_col = max(col_indices)
     
-    # Leer todo el bloque de una vez
     rng = ws.Range(ws.Cells(start_row, min_col), ws.Cells(end_row, max_col))
     values = rng.Value
     
     if values is None:
         return {col: [""] * (end_row - start_row + 1) for col in col_indices}
     
-    # Si es una sola fila, convertir a formato de lista
     if not isinstance(values[0], (list, tuple)):
         values = [values]
     
-    # Extraer columnas específicas
     result = {}
     for col_idx in col_indices:
         offset = col_idx - min_col
@@ -897,14 +873,11 @@ def main():
         log(f"Aviso al desproteger: {e}")
 
     try:
-        # Crear nueva hoja después de INVENTARIO original
         ws_inv_copia = wb.Worksheets.Add(After=ws_inv_orig)
         ws_inv_copia.Name = SHEET_INV_COPIA
         
-        # Copiar todo el contenido
         ws_inv_orig.UsedRange.Copy(Destination=ws_inv_copia.Range("A1"))
         
-        # Copiar anchos de columna
         try:
             for col in range(1, ws_inv_orig.UsedRange.Columns.Count + 1):
                 ws_inv_copia.Columns(col).ColumnWidth = ws_inv_orig.Columns(col).ColumnWidth
@@ -917,7 +890,6 @@ def main():
         log(f"ERROR al crear copia: {e}")
         raise RuntimeError(f"No se pudo crear copia de la hoja INVENTARIO: {e}")
 
-    # Re-proteger hoja original si estaba protegida
     if was_protected:
         try:
             ws_inv_orig.Protect(Password=PASS_INV, DrawingObjects=True, Contents=True, Scenarios=True)
@@ -928,7 +900,6 @@ def main():
     # 6) TRABAJAR EN INVENTARIO COPIA
     log("Trabajando en hoja INVENTARIO COPIA...")
     
-    # Detectar encabezado en COPIA
     header_row_used, hdr_copia, hdrn_copia = ws_headers_smart(
         ws_inv_copia,
         expected_row=HEADER_ROW_INV,
@@ -936,12 +907,10 @@ def main():
     )
     log(f"Encabezados detectados en fila {header_row_used} de INVENTARIO COPIA")
 
-    # Encontrar columna de referencia
     ref_col_idx = find_reference_col_idx(hdrn_copia, ws_inv_copia, header_row_used)
     last_row = ws_last_row(ws_inv_copia, ref_col_idx, header_row_used)
     start_data_row = header_row_used + 1
 
-    # Recorte defensivo antes de pivots
     pivot_top = ws_first_pivot_row(ws_inv_copia)
     if pivot_top and pivot_top > header_row_used:
         last_row = min(last_row, pivot_top - 1)
@@ -1008,9 +977,7 @@ def main():
             log(f"  - Columna no encontrada: {col_name}")
             return
         
-        # CRÍTICO: Para REFERENCIA, manejar "/" evitando interpretación como fórmula
         if col_name == "REFERENCIA":
-            # Detectar si hay referencias con "/"
             has_slash = any("/" in str(v) for v in values if v not in (None, "", np.nan))
             
             if has_slash:
@@ -1021,46 +988,33 @@ def main():
                     ws_inv_copia.Cells(start_data_row + len(values) - 1, cidx)
                 )
                 
-                # SOLUCIÓN DEFINITIVA: Escribir directamente con NumberFormat @ para evitar división
-                # Paso 1: Formato texto
                 rng.NumberFormat = "@"
-                
-                # Paso 2: Escribir valores
                 ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
                 
-                # Paso 3: Convertir a números reales donde sea posible (sin "/")
-                # y dejar como texto donde haya "/"
                 try:
-                    # Crear array para conversión masiva
                     converted_values = []
                     for v in values:
                         if v in (None, "", np.nan):
                             converted_values.append([""])
                         elif "/" in str(v) or not str(v).replace(".", "").replace("-", "").isdigit():
-                            # Mantener como texto (con formato número)
                             converted_values.append([v])
                         else:
-                            # Convertir a número real
                             try:
                                 converted_values.append([float(v)])
                             except:
                                 converted_values.append([v])
                     
-                    # Reescribir con valores convertidos
                     rng.Value = converted_values
                 except Exception as e:
                     log(f"    Aviso en conversión: {e}")
                 
-                # Paso 4: Aplicar formato número a toda la columna
                 rng.NumberFormat = "0"
                 
-                # Paso 5: ALINEACIÓN - Forzar alineación a la IZQUIERDA para consistencia visual
                 try:
                     rng.HorizontalAlignment = -4131  # xlLeft
                 except Exception as e:
                     log(f"    Aviso en alineación: {e}")
                 
-                # Paso 6: Deshabilitar verificación de errores
                 try:
                     for i in range(1, 8):
                         try:
@@ -1074,7 +1028,6 @@ def main():
                 log(f"  - Pegada columna: {col_name} (formato número, alineación izquierda)")
                 return
         
-        # Para otras columnas, proceso normal
         ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
         if number_format:
             ws_inv_copia.Columns(cidx).NumberFormat = number_format
@@ -1097,18 +1050,14 @@ def main():
             ws_copy_down_formula(ws_inv_copia, cidx, start_data_row, last_row)
             log(f"  - Fórmula arrastrada: {colname}")
 
-    # TOTAL INV
     col_total_inv = hdrn_copia.get(_norm("TOTAL INV"))
     if col_total_inv:
         ws_copy_down_formula(ws_inv_copia, col_total_inv, start_data_row, last_row)
         log("  - Fórmula arrastrada: TOTAL INV")
 
-    # EXISTENCIA
     col_exist = ws_ensure_existencia_header(ws_inv_copia, header_row_used)
     ws_copy_down_formula(ws_inv_copia, col_exist, start_data_row, last_row)
     log("  - Fórmula arrastrada: EXISTENCIA")
-
-    # NOTA: NOMBRE LISTA y NOMBRE MYR se llenarán después con datos, no con fórmulas
 
     # 11) NUEVO: Actualizar NOMBRE LISTA desde Matriz USD
     log("Actualizando NOMBRE LISTA desde Matriz USD...")
@@ -1116,11 +1065,9 @@ def main():
         try:
             col_nombre_lista = hdrn_copia.get(_norm("NOMBRE LISTA"))
             if col_nombre_lista:
-                # Leer referencias de INVENTARIO COPIA
                 refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
                 refs_copia = [to_num_str(r) for r in refs_copia]
                 
-                # Construir lista de descripciones desde matriz
                 descripciones = []
                 matched_count = 0
                 for ref in refs_copia:
@@ -1132,7 +1079,6 @@ def main():
                     else:
                         descripciones.append("")
                 
-                # Escribir en una sola operación
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_lista, descripciones)
                 log(f"  ✓ {matched_count} descripciones actualizadas desde Matriz USD")
             else:
@@ -1153,14 +1099,12 @@ def main():
         
         if col_nombre_myr:
             if col_nombre_lista and col_nombre_odoo:
-                # Leer ambas columnas en una operación
                 cols_to_read = [col_nombre_lista, col_nombre_odoo]
                 data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
                 
                 nombres_lista = data.get(col_nombre_lista, [])
                 nombres_odoo = data.get(col_nombre_odoo, [])
                 
-                # Construir valores para NOMBRE MYR
                 nombres_myr = []
                 from_lista = 0
                 from_odoo = 0
@@ -1178,18 +1122,15 @@ def main():
                     else:
                         nombres_myr.append("")
                 
-                # Escribir en una sola operación
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_myr)
                 log(f"  ✓ NOMBRE MYR actualizado: {from_lista} desde NOMBRE LISTA, {from_odoo} desde NOMBRE ODOO")
                 
             elif col_nombre_lista:
-                # Solo hay NOMBRE LISTA, copiar directo
                 nombres_lista = read_range_as_array(ws_inv_copia, start_data_row, last_row, col_nombre_lista)
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_lista)
                 log(f"  ✓ NOMBRE MYR copiado desde NOMBRE LISTA")
                 
             elif col_nombre_odoo:
-                # Solo hay NOMBRE ODOO, copiar directo
                 nombres_odoo = read_range_as_array(ws_inv_copia, start_data_row, last_row, col_nombre_odoo)
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_odoo)
                 log(f"  ✓ NOMBRE MYR copiado desde NOMBRE ODOO")
@@ -1203,7 +1144,26 @@ def main():
         import traceback
         log(traceback.format_exc())
 
-    # 12) Traer columnas desde INVENTARIO ORIGINAL - OPTIMIZADO
+    # 12) Llevar EXISTENCIA_CALC en INVENTARIO COPIA - OPTIMIZADO
+    log("Escribiendo EXISTENCIA consolidada en INVENTARIO COPIA (MODO OPTIMIZADO)...")
+    try:
+        refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
+        refs_copia = [to_num_str(r) for r in refs_copia]
+        
+        existencias = []
+        for key in refs_copia:
+            if key:
+                val = exist_map.get(key)
+                existencias.append(float(val) if pd.notna(val) else "")
+            else:
+                existencias.append("")
+        
+        write_range_as_array(ws_inv_copia, start_data_row, col_exist, existencias)
+        log(f"✓ {len([e for e in existencias if e != ''])} existencias actualizadas")
+    except Exception as e:
+        log(f"⚠ Error al escribir existencias: {e}")
+
+    # 13) Traer columnas desde INVENTARIO ORIGINAL - OPTIMIZADO (MOVIDO DESPUÉS DE EXISTENCIAS)
     log("Trayendo columnas desde INVENTARIO ORIGINAL por REFERENCIA (MODO OPTIMIZADO)...")
     try:
         hr_orig, hdr_orig, hdrn_orig = ws_headers_smart(ws_inv_orig, HEADER_ROW_INV, ["REFERENCIA"])
@@ -1212,17 +1172,14 @@ def main():
         if ref_idx_orig:
             last_orig = ws_last_row(ws_inv_orig, ref_idx_orig, hr_orig)
             
-            # Limitar el rango
             pivot_top_orig = ws_first_pivot_row(ws_inv_orig)
             if pivot_top_orig and pivot_top_orig > hr_orig:
                 last_orig = min(last_orig, pivot_top_orig - 1)
             
-            # Limitar a máximo 50000 filas
             max_rows = min(last_orig, hr_orig + 50000)
             
             log(f"Leyendo {max_rows - hr_orig} filas desde INVENTARIO ORIGINAL...")
             
-            # OPTIMIZACIÓN CRÍTICA: Identificar columnas a leer
             cols_to_read = {ref_idx_orig: "__REF__"}
             for colname in COLS_DESDE_ORIGINAL:
                 cidx = hdrn_orig.get(_norm(colname))
@@ -1233,135 +1190,51 @@ def main():
             if len(cols_to_read) <= 1:
                 log("⚠ No hay columnas adicionales para traer")
             else:
-                # LEER TODAS LAS COLUMNAS EN UNA SOLA OPERACIÓN
                 col_indices = sorted(cols_to_read.keys())
                 all_data = read_multiple_columns_optimized(ws_inv_orig, hr_orig + 1, max_rows, col_indices)
                 
-                # Construir mapas
                 refs_orig = all_data[ref_idx_orig]
-                refs_orig = [str(r).strip() if r is not None else "" for r in refs_orig]
+                refs_orig_normalized = [to_num_str(r) for r in refs_orig]
                 
                 maps = {}
                 for col_idx in col_indices:
                     if col_idx == ref_idx_orig:
                         continue
                     colname = cols_to_read[col_idx]
-                    maps[colname] = dict(zip(refs_orig, all_data[col_idx]))
+                    maps[colname] = dict(zip(refs_orig_normalized, all_data[col_idx]))
                     log(f"    ✓ Mapa creado para {colname}: {len(maps[colname])} valores")
                 
-                # LEER REFERENCIAS DE INVENTARIO COPIA
                 log("Leyendo referencias de INVENTARIO COPIA...")
                 refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
-                refs_copia = [str(r).strip() if r is not None else "" for r in refs_copia]
+                refs_copia_normalized = [to_num_str(r) for r in refs_copia]
                 
-                # CONSTRUIR VALORES A ESCRIBIR
                 log("Construyendo valores a escribir...")
                 for colname in COLS_DESDE_ORIGINAL:
                     tgt_idx = hdrn_copia.get(_norm(colname))
                     if not tgt_idx or colname not in maps:
                         continue
                     
-                    # Construir lista de valores
                     values_to_write = []
-                    for ref in refs_copia:
-                        val = maps[colname].get(ref, None)
-                        values_to_write.append(val if val is not None else "")
+                    matched = 0
+                    for ref in refs_copia_normalized:
+                        if ref and ref in maps[colname]:
+                            val = maps[colname][ref]
+                            values_to_write.append(val if val not in (None, "", "None") else "")
+                            if val not in (None, "", "None"):
+                                matched += 1
+                        else:
+                            values_to_write.append("")
                     
-                    # ESCRIBIR EN UNA SOLA OPERACIÓN
                     write_range_as_array(ws_inv_copia, start_data_row, tgt_idx, values_to_write)
-                    log(f"    ✓ Columna '{colname}' escrita ({len(values_to_write)} filas)")
+                    log(f"    ✓ Columna '{colname}' escrita: {matched} coincidencias de {len(values_to_write)} filas")
                 
-                log(f"✓ Columnas traídas exitosamente (modo optimizado)")
+                log(f"✓ Columnas traídas exitosamente desde INVENTARIO ORIGINAL (modo optimizado)")
     except Exception as e:
         log(f"⚠ Error al traer columnas desde original: {e}")
         import traceback
         log(traceback.format_exc())
 
-    # 13) Llevar EXISTENCIA_CALC en INVENTARIO COPIA - OPTIMIZADO
-    log("Escribiendo EXISTENCIA consolidada en INVENTARIO COPIA (MODO OPTIMIZADO)...")
-    try:
-        # Leer todas las referencias de una vez
-        refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
-        refs_copia = [to_num_str(r) for r in refs_copia]
-        
-        # Construir lista de existencias
-        existencias = []
-        for key in refs_copia:
-            if key:
-                val = exist_map.get(key)
-                existencias.append(float(val) if pd.notna(val) else "")
-            else:
-                existencias.append("")
-        
-        # Escribir en una sola operación
-        write_range_as_array(ws_inv_copia, start_data_row, col_exist, existencias)
-        log(f"✓ {len([e for e in existencias if e != ''])} existencias actualizadas")
-    except Exception as e:
-        log(f"⚠ Error al escribir existencias: {e}")
-
-    # 14) Ajustes con filtros en INVENTARIO COPIA - OPTIMIZADO
-    log("Aplicando ajustes de #N/D en INVENTARIO COPIA (MODO OPTIMIZADO)...")
-    try:
-        marcas_ok = {"clevite", "cummins", "dana", "fersa", "meritor", "zf"}
-        idx_linea_copia = hdrn_copia.get(_norm("LINEA COPIA"))
-        idx_linea_sys   = hdrn_copia.get(_norm("Linea sistema"))
-        idx_marca_copia = hdrn_copia.get(_norm("MARCA copia"))
-        idx_marca_sys   = hdrn_copia.get(_norm("Marca sistema"))
-        idx_sub_copia   = hdrn_copia.get(_norm("SUB-LINEA COPIA"))
-        idx_sub_sys     = hdrn_copia.get(_norm("Sub- linea sistema"))
-
-        if idx_linea_copia and idx_linea_sys:
-            # Leer todas las columnas necesarias de una vez
-            cols_needed = [c for c in [idx_linea_copia, idx_linea_sys, idx_marca_sys, idx_sub_sys] if c]
-            all_data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_needed)
-            
-            lineas_copia = all_data.get(idx_linea_copia, [])
-            lineas_sys = all_data.get(idx_linea_sys, [])
-            marcas_sys = all_data.get(idx_marca_sys, []) if idx_marca_sys else [""] * len(lineas_copia)
-            subs_sys = all_data.get(idx_sub_sys, []) if idx_sub_sys else [""] * len(lineas_copia)
-            
-            # Construir listas de valores a escribir
-            new_marcas = []
-            new_lineas = []
-            new_subs = []
-            changes_count = 0
-            
-            for i in range(len(lineas_copia)):
-                linea_copia = str(lineas_copia[i]).strip() if lineas_copia[i] is not None else ""
-                linea_sys = str(lineas_sys[i]).strip() if lineas_sys[i] is not None else ""
-                marca_sys = str(marcas_sys[i]).strip() if marcas_sys[i] is not None else ""
-                sub_sys = str(subs_sys[i]) if subs_sys[i] is not None else ""
-                
-                if linea_copia in ("#N/D", "#N/A", "N/D", "ND", ""):
-                    if _norm(linea_sys) and any(m in _norm(linea_sys) for m in marcas_ok):
-                        new_marcas.append(marca_sys)
-                        new_lineas.append(linea_sys)
-                        new_subs.append(sub_sys)
-                        changes_count += 1
-                    else:
-                        new_marcas.append(linea_copia)
-                        new_lineas.append(linea_copia)
-                        new_subs.append("")
-                else:
-                    new_marcas.append(linea_copia)
-                    new_lineas.append(linea_copia)
-                    new_subs.append("")
-            
-            # Escribir solo si hay cambios
-            if changes_count > 0:
-                if idx_marca_copia:
-                    write_range_as_array(ws_inv_copia, start_data_row, idx_marca_copia, new_marcas)
-                if idx_linea_copia:
-                    write_range_as_array(ws_inv_copia, start_data_row, idx_linea_copia, new_lineas)
-                if idx_sub_copia:
-                    write_range_as_array(ws_inv_copia, start_data_row, idx_sub_copia, new_subs)
-                log(f"✓ {changes_count} ajustes aplicados")
-            else:
-                log("✓ No se requirieron ajustes")
-    except Exception as e:
-        log(f"⚠ Error al aplicar ajustes: {e}")
-
-    # 15) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
+    # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
     try:
         ws_lp = None
@@ -1385,11 +1258,9 @@ def main():
             ref_fertrac_idx = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
             
             if ref_fertrac_idx:
-                # Leer referencias de INVENTARIO COPIA
                 referencias_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
                 referencias_copia = [r for r in referencias_copia if r is not None and str(r).strip()]
                 
-                # Escribir en una sola operación
                 last_row_lp = hr_lp + len(referencias_copia)
                 write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
                 
@@ -1409,10 +1280,9 @@ def main():
     except Exception as e:
         log(f"Error al llenar REFERENCIA FERTRAC: {e}")
 
-    # 16) GUARDADO COMO ARCHIVO NUEVO
+    # 15) GUARDADO COMO ARCHIVO NUEVO
     log("Preparando guardado del archivo...")
 
-    # Asegurar hoja visible
     try:
         ws_count = int(wb.Worksheets.Count)
         has_visible = False
@@ -1429,13 +1299,11 @@ def main():
     except Exception:
         pass
 
-    # Evitar Add-In oculto
     with contextlib.suppress(Exception):
         wb.IsAddin = False
     with contextlib.suppress(Exception):
         wb.Windows(1).Visible = True
 
-    # Nombre de salida
     try:
         base_name = OUTPUT_BASENAME
     except NameError:
@@ -1443,14 +1311,12 @@ def main():
     out_name = f"{base_name} {datetime.now():%Y%m%d_%H%M}.xlsx"
     out_path = BASE_PATH / out_name
 
-    # Restaurar cálculo automático antes de guardar
     log("Restaurando cálculo automático...")
     try:
         excel.Calculation = -4105  # xlCalculationAutomatic
     except Exception as e:
         log(f"Aviso al restaurar cálculo: {e}")
 
-    # Aplicar contraseña si aplica
     log(f"Guardando archivo: {out_name}")
     apply_pw = saveinfo.get("reapply_password")
     if apply_pw:
@@ -1460,10 +1326,8 @@ def main():
 
     log(f"✅ Archivo NUEVO creado: {out_path}")
 
-    # Cerrar sin guardar original
     excel_close(excel, wb, save=False)
 
-    # Limpiar temporal
     tmp = saveinfo.get("tmp_path")
     if tmp and os.path.exists(tmp):
         with contextlib.suppress(Exception):
