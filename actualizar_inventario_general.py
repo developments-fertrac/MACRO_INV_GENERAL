@@ -27,6 +27,10 @@ PFX_VAL_FALT_IMPO   = "VALORIZADO FALTANTES IMPO"
 PFX_VAL_FALT        = "VALORIZADO FALTANTES"
 PFX_VAL_TOBERIN     = "VALORIZADO TOBERIN"
 
+# Nuevo: Matriz USD
+PFX_MATRIZ_USD = "$2025 MATRIZ USD"
+SHEET_MATRIZ_2025 = "2025"
+
 FN_INV_PLANTILLA = "$2025 INVENTARIO GENERAL.xlsx"
 SHEET_INV_ORIG   = "INVENTARIO"
 SHEET_INV_COPIA  = "INVENTARIO COPIA"
@@ -35,6 +39,7 @@ SHEET_INV_LISTA  = "INV LISTA PRECIOS"
 HEADER_ROW_INV         = 2
 HEADER_ROW_INV_LISTA   = 1
 HEADER_ROW_VAL         = 9
+HEADER_ROW_MATRIZ      = 1  # Ajustar según el archivo real
 
 # Columnas a limpiar en INVENTARIO COPIA
 COLS_A_LIMPIAR = [
@@ -353,6 +358,143 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     out["__REF_INT__"] = df[refc].apply(to_num_str)
     out["__CANT__"]    = pd.to_numeric(df[cant], errors="coerce").fillna(0.0)
     return out
+
+def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
+    """
+    Carga el archivo MATRIZ USD, hoja 2025.
+    Retorna DataFrame con columnas:
+    - __REF_MATRIZ__: Referencia Inventario Fertrac normalizada
+    - __DESC_LISTA__: Descripción Lista Precios
+    """
+    try:
+        p = find_by_prefix(base_dir, PFX_MATRIZ_USD)
+        log(f"Abriendo Matriz USD: {p.name}")
+        
+        src = open_as_excel_source(p, PASSWORDS_TRY)
+        
+        # Intentar encontrar la hoja "2025"
+        xf = pd.ExcelFile(src, engine="openpyxl")
+        sheet_found = None
+        for sn in xf.sheet_names:
+            if "2025" in sn or _norm(sn) == "2025":
+                sheet_found = sn
+                break
+        if not sheet_found:
+            sheet_found = xf.sheet_names[0]  # Primera hoja como último recurso
+        log(f"  Usando hoja: {sheet_found}")
+        
+        # Leer SIN header primero para buscar la fila correcta
+        df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
+        
+        # Buscar fila que contiene los encabezados correctos
+        header_row_idx = None
+        for idx in range(min(20, len(df_raw))):  # Buscar en las primeras 20 filas
+            row_values = df_raw.iloc[idx].astype(str).str.lower()
+            # Buscar si la fila contiene "referencia" y "descripcion" o "lista"
+            has_ref = any("referencia" in str(v).lower() and "fertrac" in str(v).lower() for v in df_raw.iloc[idx])
+            has_desc = any("descripcion" in str(v).lower() and "lista" in str(v).lower() for v in df_raw.iloc[idx])
+            
+            if has_ref or has_desc:
+                header_row_idx = idx
+                log(f"  Encabezados encontrados en fila {idx + 1}")
+                break
+        
+        if header_row_idx is None:
+            # Buscar fila con más valores no vacíos en las primeras 10 filas
+            max_non_empty = 0
+            for idx in range(min(10, len(df_raw))):
+                non_empty = df_raw.iloc[idx].notna().sum()
+                if non_empty > max_non_empty:
+                    max_non_empty = non_empty
+                    header_row_idx = idx
+            log(f"  Usando fila {header_row_idx + 1} como encabezado (más valores no vacíos)")
+        
+        # Leer con el header correcto
+        df = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=header_row_idx)
+        
+        # Limpiar columnas unnamed y vacías
+        df.columns = [str(c).strip() if not str(c).startswith("Unnamed") and str(c) != "nan" else f"_COL_{i}" 
+                      for i, c in enumerate(df.columns)]
+        
+        log(f"  Columnas encontradas: {list(df.columns)[:10]}...")  # Mostrar primeras 10
+        
+        # Crear índice normalizado de columnas
+        idx = {_norm(c): c for c in df.columns}
+        
+        # Buscar columna de REFERENCIA INVENTARIO FERTRAC (columna A según imagen)
+        ref_col = None
+        for col_name in df.columns:
+            col_norm = _norm(col_name)
+            if "referencia" in col_norm and ("fertrac" in col_norm or "inventario" in col_norm):
+                ref_col = col_name
+                break
+        
+        # Si no se encuentra por nombre, usar la primera columna con datos válidos
+        if not ref_col:
+            for col_name in df.columns[:5]:  # Revisar primeras 5 columnas
+                non_null = df[col_name].notna().sum()
+                if non_null > 10:  # Si tiene más de 10 valores
+                    # Verificar si parece una referencia (contiene FP- o números)
+                    sample = df[col_name].dropna().astype(str).head(5)
+                    if any("FP-" in str(v) or str(v).replace("-", "").isdigit() for v in sample):
+                        ref_col = col_name
+                        log(f"  Usando columna '{col_name}' como REFERENCIA (detectada por patrón)")
+                        break
+        
+        # Buscar columna de DESCRIPCION LISTA PRECIOS (columna C según imagen)
+        desc_col = None
+        for col_name in df.columns:
+            col_norm = _norm(col_name)
+            if "descripcion" in col_norm and "lista" in col_norm and "precio" in col_norm:
+                desc_col = col_name
+                break
+        
+        # Si no se encuentra por nombre, buscar columna con texto descriptivo
+        if not desc_col:
+            for col_name in df.columns:
+                if col_name == ref_col:
+                    continue
+                non_null = df[col_name].notna().sum()
+                if non_null > 10:
+                    # Verificar si parece descripción (texto largo)
+                    sample = df[col_name].dropna().astype(str).head(5)
+                    avg_len = sum(len(str(v)) for v in sample) / len(sample) if len(sample) > 0 else 0
+                    if avg_len > 15:  # Descripciones suelen ser más largas
+                        desc_col = col_name
+                        log(f"  Usando columna '{col_name}' como DESCRIPCION (detectada por longitud)")
+                        break
+        
+        if not ref_col:
+            raise KeyError(f"No encontré columna 'REFERENCIA INVENTARIO FERTRAC' en {p.name}. Columnas: {list(df.columns)}")
+        if not desc_col:
+            raise KeyError(f"No encontré columna 'DESCRIPCION LISTA PRECIOS' en {p.name}. Columnas: {list(df.columns)}")
+        
+        log(f"  ✓ Columna referencia: {ref_col}")
+        log(f"  ✓ Columna descripción: {desc_col}")
+        
+        # Filtrar filas válidas
+        df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
+        
+        # Crear DataFrame de salida
+        out = pd.DataFrame()
+        out["__REF_MATRIZ__"] = df[ref_col].apply(to_num_str)
+        out["__DESC_LISTA__"] = df[desc_col].fillna("")
+        
+        # Eliminar duplicados, quedándose con el primero
+        out = out.drop_duplicates(subset=["__REF_MATRIZ__"], keep="first")
+        
+        log(f"  ✓ Matriz USD cargada: {len(out)} referencias")
+        return out
+        
+    except FileNotFoundError:
+        log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MATRIZ_USD}'. Se continuará sin actualizar NOMBRE LISTA desde Matriz USD.")
+        return pd.DataFrame(columns=["__REF_MATRIZ__", "__DESC_LISTA__"])
+    except Exception as e:
+        log(f"⚠ ERROR al cargar Matriz USD: {e}")
+        import traceback
+        log(traceback.format_exc())
+        log(f"  Se continuará sin actualizar NOMBRE LISTA desde Matriz USD.")
+        return pd.DataFrame(columns=["__REF_MATRIZ__", "__DESC_LISTA__"])
 
 # ==== EXCEL COM ====
 def excel_open(path: Path, password: str | None = None):
@@ -683,6 +825,11 @@ def main():
     df_val_falt  = cargar_valorizado(BASE_PATH, PFX_VAL_FALT)
     df_val_tob   = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN)
 
+    # NUEVO: Cargar Matriz USD
+    df_matriz_usd = cargar_matriz_usd(BASE_PATH)
+    matriz_map = df_matriz_usd.set_index("__REF_MATRIZ__")["__DESC_LISTA__"].to_dict() if len(df_matriz_usd) > 0 else {}
+    log(f"Matriz USD: {len(matriz_map)} referencias disponibles para actualizar NOMBRE LISTA")
+
     # Join de cantidades
     val_map_impo = df_val_impo.set_index("__REF_INT__")["__CANT__"]
     val_map_falt = df_val_falt.set_index("__REF_INT__")["__CANT__"]
@@ -881,7 +1028,7 @@ def main():
                 # Paso 2: Escribir valores
                 ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
                 
-                # Paso 3: Convertir a números reales donde sea posible (sin "/" )
+                # Paso 3: Convertir a números reales donde sea posible (sin "/")
                 # y dejar como texto donde haya "/"
                 try:
                     # Crear array para conversión masiva
@@ -924,7 +1071,7 @@ def main():
                 except Exception:
                     pass
                 
-                log(f"  - Pegada columna: {col_name} (formato número, alineación derecha)")
+                log(f"  - Pegada columna: {col_name} (formato número, alineación izquierda)")
                 return
         
         # Para otras columnas, proceso normal
@@ -961,14 +1108,102 @@ def main():
     ws_copy_down_formula(ws_inv_copia, col_exist, start_data_row, last_row)
     log("  - Fórmula arrastrada: EXISTENCIA")
 
-    # NOMBRE LISTA y NOMBRE MYR
-    for colname in ["NOMBRE LISTA", "NOMBRE MYR"]:
-        cidx = hdrn_copia.get(_norm(colname))
-        if cidx:
-            ws_copy_down_formula(ws_inv_copia, cidx, start_data_row, last_row)
-            log(f"  - Fórmula arrastrada: {colname}")
+    # NOTA: NOMBRE LISTA y NOMBRE MYR se llenarán después con datos, no con fórmulas
 
-    # 11) Traer columnas desde INVENTARIO ORIGINAL - OPTIMIZADO
+    # 11) NUEVO: Actualizar NOMBRE LISTA desde Matriz USD
+    log("Actualizando NOMBRE LISTA desde Matriz USD...")
+    if len(matriz_map) > 0:
+        try:
+            col_nombre_lista = hdrn_copia.get(_norm("NOMBRE LISTA"))
+            if col_nombre_lista:
+                # Leer referencias de INVENTARIO COPIA
+                refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
+                refs_copia = [to_num_str(r) for r in refs_copia]
+                
+                # Construir lista de descripciones desde matriz
+                descripciones = []
+                matched_count = 0
+                for ref in refs_copia:
+                    if ref in matriz_map:
+                        desc = matriz_map[ref]
+                        descripciones.append(desc if desc else "")
+                        if desc:
+                            matched_count += 1
+                    else:
+                        descripciones.append("")
+                
+                # Escribir en una sola operación
+                write_range_as_array(ws_inv_copia, start_data_row, col_nombre_lista, descripciones)
+                log(f"  ✓ {matched_count} descripciones actualizadas desde Matriz USD")
+            else:
+                log("  ⚠ Columna 'NOMBRE LISTA' no encontrada en INVENTARIO COPIA")
+        except Exception as e:
+            log(f"  ⚠ Error al actualizar NOMBRE LISTA: {e}")
+            import traceback
+            log(traceback.format_exc())
+    else:
+        log("  ⚠ No hay datos de Matriz USD disponibles - saltando actualización de NOMBRE LISTA")
+
+    # 11.5) NUEVO: Llenar NOMBRE MYR con prioridad NOMBRE LISTA -> NOMBRE ODOO
+    log("Actualizando NOMBRE MYR (prioridad: NOMBRE LISTA → NOMBRE ODOO)...")
+    try:
+        col_nombre_myr = hdrn_copia.get(_norm("NOMBRE MYR"))
+        col_nombre_lista = hdrn_copia.get(_norm("NOMBRE LISTA"))
+        col_nombre_odoo = hdrn_copia.get(_norm("NOMBRE ODOO"))
+        
+        if col_nombre_myr:
+            if col_nombre_lista and col_nombre_odoo:
+                # Leer ambas columnas en una operación
+                cols_to_read = [col_nombre_lista, col_nombre_odoo]
+                data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
+                
+                nombres_lista = data.get(col_nombre_lista, [])
+                nombres_odoo = data.get(col_nombre_odoo, [])
+                
+                # Construir valores para NOMBRE MYR
+                nombres_myr = []
+                from_lista = 0
+                from_odoo = 0
+                
+                for i in range(len(nombres_lista)):
+                    lista_val = str(nombres_lista[i]).strip() if nombres_lista[i] not in (None, "", "None") else ""
+                    odoo_val = str(nombres_odoo[i]).strip() if nombres_odoo[i] not in (None, "", "None") else ""
+                    
+                    if lista_val:
+                        nombres_myr.append(lista_val)
+                        from_lista += 1
+                    elif odoo_val:
+                        nombres_myr.append(odoo_val)
+                        from_odoo += 1
+                    else:
+                        nombres_myr.append("")
+                
+                # Escribir en una sola operación
+                write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_myr)
+                log(f"  ✓ NOMBRE MYR actualizado: {from_lista} desde NOMBRE LISTA, {from_odoo} desde NOMBRE ODOO")
+                
+            elif col_nombre_lista:
+                # Solo hay NOMBRE LISTA, copiar directo
+                nombres_lista = read_range_as_array(ws_inv_copia, start_data_row, last_row, col_nombre_lista)
+                write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_lista)
+                log(f"  ✓ NOMBRE MYR copiado desde NOMBRE LISTA")
+                
+            elif col_nombre_odoo:
+                # Solo hay NOMBRE ODOO, copiar directo
+                nombres_odoo = read_range_as_array(ws_inv_copia, start_data_row, last_row, col_nombre_odoo)
+                write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_odoo)
+                log(f"  ✓ NOMBRE MYR copiado desde NOMBRE ODOO")
+            else:
+                log("  ⚠ No se encontraron columnas NOMBRE LISTA ni NOMBRE ODOO")
+        else:
+            log("  ⚠ Columna 'NOMBRE MYR' no encontrada en INVENTARIO COPIA")
+            
+    except Exception as e:
+        log(f"  ⚠ Error al actualizar NOMBRE MYR: {e}")
+        import traceback
+        log(traceback.format_exc())
+
+    # 12) Traer columnas desde INVENTARIO ORIGINAL - OPTIMIZADO
     log("Trayendo columnas desde INVENTARIO ORIGINAL por REFERENCIA (MODO OPTIMIZADO)...")
     try:
         hr_orig, hdr_orig, hdrn_orig = ws_headers_smart(ws_inv_orig, HEADER_ROW_INV, ["REFERENCIA"])
@@ -1042,7 +1277,7 @@ def main():
         import traceback
         log(traceback.format_exc())
 
-    # 12) Llevar EXISTENCIA_CALC en INVENTARIO COPIA - OPTIMIZADO
+    # 13) Llevar EXISTENCIA_CALC en INVENTARIO COPIA - OPTIMIZADO
     log("Escribiendo EXISTENCIA consolidada en INVENTARIO COPIA (MODO OPTIMIZADO)...")
     try:
         # Leer todas las referencias de una vez
@@ -1064,7 +1299,7 @@ def main():
     except Exception as e:
         log(f"⚠ Error al escribir existencias: {e}")
 
-    # 13) Ajustes con filtros en INVENTARIO COPIA - OPTIMIZADO
+    # 14) Ajustes con filtros en INVENTARIO COPIA - OPTIMIZADO
     log("Aplicando ajustes de #N/D en INVENTARIO COPIA (MODO OPTIMIZADO)...")
     try:
         marcas_ok = {"clevite", "cummins", "dana", "fersa", "meritor", "zf"}
@@ -1126,7 +1361,7 @@ def main():
     except Exception as e:
         log(f"⚠ Error al aplicar ajustes: {e}")
 
-    # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
+    # 15) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
     try:
         ws_lp = None
@@ -1174,7 +1409,7 @@ def main():
     except Exception as e:
         log(f"Error al llenar REFERENCIA FERTRAC: {e}")
 
-    # 15) GUARDADO COMO ARCHIVO NUEVO
+    # 16) GUARDADO COMO ARCHIVO NUEVO
     log("Preparando guardado del archivo...")
 
     # Asegurar hoja visible
