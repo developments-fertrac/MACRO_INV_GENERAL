@@ -826,8 +826,12 @@ def main():
     df_val_gen["__TOB_DIF__"]    = df_val_gen["__CANT__"] - df_val_gen["__TOB_CANT__"]
 
     # Consolidado EXISTENCIA_CALC
+    # FÓRMULA: VALORIZADO GENERAL - FALTANTES IMPO - FALTANTES - TOBERÍN
     df_val_gen["__EXIST_CALC__"] = (
-        df_val_gen["__IMPO_CANT__"] + df_val_gen["__FALT_CANT__"] + df_val_gen["__TOB_CANT__"]
+        df_val_gen["__CANT__"] 
+        - df_val_gen["__IMPO_CANT__"] 
+        - df_val_gen["__FALT_CANT__"] 
+        - df_val_gen["__TOB_CANT__"]
     )
     exist_map = df_val_gen.set_index("__REF_INT__")["__EXIST_CALC__"]
 
@@ -1073,11 +1077,13 @@ def main():
                 for ref in refs_copia:
                     if ref in matriz_map:
                         desc = matriz_map[ref]
-                        descripciones.append(desc if desc else "")
+                        # Si hay descripción, usarla; si no, poner "0"
+                        descripciones.append(desc if desc else "0")
                         if desc:
                             matched_count += 1
                     else:
-                        descripciones.append("")
+                        # Si no hay coincidencia, poner "0"
+                        descripciones.append("0")
                 
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_lista, descripciones)
                 log(f"  ✓ {matched_count} descripciones actualizadas desde Matriz USD")
@@ -1110,7 +1116,7 @@ def main():
                 from_odoo = 0
                 
                 for i in range(len(nombres_lista)):
-                    lista_val = str(nombres_lista[i]).strip() if nombres_lista[i] not in (None, "", "None") else ""
+                    lista_val = str(nombres_lista[i]).strip() if nombres_lista[i] not in (None, "", "None", 0) else ""
                     odoo_val = str(nombres_odoo[i]).strip() if nombres_odoo[i] not in (None, "", "None") else ""
                     
                     if lista_val:
@@ -1151,15 +1157,22 @@ def main():
         refs_copia = [to_num_str(r) for r in refs_copia]
         
         existencias = []
+        valores_encontrados = 0
         for key in refs_copia:
             if key:
                 val = exist_map.get(key)
-                existencias.append(float(val) if pd.notna(val) else "")
+                if pd.notna(val):
+                    existencias.append(float(val))
+                    valores_encontrados += 1
+                else:
+                    # Si no hay valor, poner 0
+                    existencias.append(0)
             else:
-                existencias.append("")
+                # Si no hay referencia, poner 0
+                existencias.append(0)
         
         write_range_as_array(ws_inv_copia, start_data_row, col_exist, existencias)
-        log(f"✓ {len([e for e in existencias if e != ''])} existencias actualizadas")
+        log(f"✓ {valores_encontrados} existencias actualizadas, {len(existencias) - valores_encontrados} con valor 0")
     except Exception as e:
         log(f"⚠ Error al escribir existencias: {e}")
 
@@ -1229,6 +1242,23 @@ def main():
                     log(f"    ✓ Columna '{colname}' escrita: {matched} coincidencias de {len(values_to_write)} filas")
                 
                 log(f"✓ Columnas traídas exitosamente desde INVENTARIO ORIGINAL (modo optimizado)")
+                
+                # NUEVO: Centrar columna INV BODEGA GERENCIA
+                log("Aplicando formato centrado a INV BODEGA GERENCIA...")
+                try:
+                    inv_bodega_idx = hdrn_copia.get(_norm("INV BODEGA GERENCIA"))
+                    if inv_bodega_idx:
+                        rng = ws_inv_copia.Range(
+                            ws_inv_copia.Cells(start_data_row, inv_bodega_idx),
+                            ws_inv_copia.Cells(last_row, inv_bodega_idx)
+                        )
+                        rng.HorizontalAlignment = -4108  # xlCenter
+                        log("  ✓ Columna INV BODEGA GERENCIA centrada")
+                    else:
+                        log("  ⚠ Columna INV BODEGA GERENCIA no encontrada")
+                except Exception as e:
+                    log(f"  ⚠ Error al centrar INV BODEGA GERENCIA: {e}")
+                
     except Exception as e:
         log(f"⚠ Error al traer columnas desde original: {e}")
         import traceback
