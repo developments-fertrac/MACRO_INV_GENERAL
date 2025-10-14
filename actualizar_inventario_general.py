@@ -594,6 +594,273 @@ def ws_pivot_blocks(ws):
         pass
     return blocks
 
+def ws_ensure_range(ws, start_row: int, expected_rows: int, header_row: int) -> int:
+    """
+    Asegura que el rango detectado incluya todas las filas esperadas.
+    Retorna el last_row correcto considerando pivots.
+    """
+    calculated_last = start_row + expected_rows - 1
+    
+    # Verificar límite por pivot
+    pivot_top = ws_first_pivot_row(ws)
+    if pivot_top and pivot_top > header_row:
+        if calculated_last >= pivot_top:
+            log(f"⚠ Límite por pivot: reduciendo de {calculated_last} a {pivot_top - 1}")
+            return pivot_top - 1
+    
+    return calculated_last
+
+
+def ws_apply_borders_to_range(ws, start_row: int, end_row: int, start_col: int, end_col: int):
+    """
+    Aplica bordes a un rango completo de celdas.
+    """
+    try:
+        log(f"  🖌️ Aplicando bordes al rango: filas {start_row} a {end_row}, columnas {start_col} a {end_col}")
+        
+        # Crear rango completo
+        full_range = ws.Range(ws.Cells(start_row, start_col), ws.Cells(end_row, end_col))
+        
+        # Aplicar todos los bordes
+        for border_id in [7, 8, 9, 10, 11, 12]:
+            try:
+                full_range.Borders(border_id).LineStyle = 1      # xlContinuous
+                full_range.Borders(border_id).Weight = 2         # xlThin
+                full_range.Borders(border_id).ColorIndex = -4105 # xlColorIndexAutomatic
+            except Exception:
+                continue
+        
+        log(f"  ✅ Bordes aplicados a {end_row - start_row + 1} filas")
+        
+    except Exception as e:
+        log(f"  ⚠ Error al aplicar bordes: {e}")
+
+
+def ws_remove_formatting_from_range(ws, start_row: int, end_row: int, start_col: int, end_col: int):
+    """
+    Elimina formato de negrita y color de fondo de un rango.
+    Preserva los formatos de número (General, Contabilidad, etc.) de cada columna.
+    """
+    try:
+        log(f"  🧹 Limpiando formato visual en rango: filas {start_row} a {end_row}, columnas {start_col} a {end_col}")
+        
+        # Procesar columna por columna para preservar formatos numéricos
+        for col in range(start_col, end_col + 1):
+            try:
+                # Obtener formato de número actual de la primera celda de la columna
+                original_number_format = ws.Cells(start_row, col).NumberFormat
+                
+                # Crear rango de la columna
+                col_range = ws.Range(ws.Cells(start_row, col), ws.Cells(end_row, col))
+                
+                # Eliminar negrita
+                try:
+                    col_range.Font.Bold = False
+                except Exception:
+                    pass
+                
+                # Eliminar color de fondo (volver a blanco/sin color)
+                try:
+                    col_range.Interior.ColorIndex = 0  # xlColorIndexNone
+                except Exception:
+                    pass
+                
+                # Restaurar formato de número original
+                try:
+                    col_range.NumberFormat = original_number_format
+                except Exception:
+                    pass
+                    
+            except Exception:
+                continue
+        
+        log(f"  ✓ Formato visual limpiado (formatos numéricos preservados)")
+        
+    except Exception as e:
+        log(f"  ⚠ Error al limpiar formato: {e}")
+
+
+def ws_update_subtotal_formula(ws, formula_row: int, last_data_row: int):
+    """Actualiza la fórmula de subtotal en la fila 1 para que abarque todo el rango."""
+    try:
+        log(f"  📐 Actualizando fórmulas de subtotal en fila {formula_row}...")
+        
+        used_cols = ws.UsedRange.Columns.Count
+        updated_count = 0
+        
+        for col in range(1, used_cols + 1):
+            try:
+                cell_formula = ws.Cells(formula_row, col).Formula
+                
+                if cell_formula and "SUBTOTAL" in str(cell_formula).upper():
+                    import re
+                    match = re.search(r'SUBTOTAL\((\d+),', str(cell_formula))
+                    
+                    if match:
+                        func_num = match.group(1)
+                        col_letter = _col_num_to_letter(col)
+                        new_formula = f"=SUBTOTAL({func_num},{col_letter}3:{col_letter}{last_data_row})"
+                        ws.Cells(formula_row, col).Formula = new_formula
+                        updated_count += 1
+                        
+            except Exception:
+                continue
+        
+        if updated_count > 0:
+            log(f"  ✓ {updated_count} fórmulas de subtotal actualizadas")
+        else:
+            log(f"  ℹ No se encontraron fórmulas SUBTOTAL para actualizar")
+        
+    except Exception as e:
+        log(f"  ⚠ Error al actualizar fórmulas de subtotal: {e}")
+
+
+def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
+    """
+    Agrega subtotales al final de todos los registros para EXISTENCIA y TOTAL INV.
+    Aplica formato azul como encabezado, negrita, bordes y formato numérico adecuado.
+    SOLO aplica bordes a las celdas con subtotales, no a toda la fila.
+    """
+    try:
+        log(f"  🧮 Agregando subtotales finales en fila {last_data_row + 1}...")
+        
+        subtotal_row = last_data_row + 1
+        
+        # Buscar columna EXISTENCIA
+        exist_col = None
+        for name, col in hdrn.items():
+            if name.startswith("existencia "):
+                exist_col = col
+                break
+        
+        # Buscar columna TOTAL INV
+        total_inv_col = hdrn.get(_norm("TOTAL INV"))
+        
+        # Obtener color azul del encabezado
+        header_color = None
+        try:
+            header_color = ws.Cells(header_row, 1).Interior.Color
+        except Exception:
+            header_color = 15849925  # Azul claro por defecto (RGB: 221, 235, 247)
+        
+        subtotals_added = 0
+
+                
+        # Subtotal EXISTENCIA
+        if exist_col:
+            try:
+                col_letter = _col_num_to_letter(exist_col)
+                # CAMBIO: Usar función 9 en lugar de 109
+                formula = f"=SUBTOTAL(9,{col_letter}{header_row + 1}:{col_letter}{last_data_row})"
+                
+                cell = ws.Cells(subtotal_row, exist_col)
+                
+                # Aplicar fórmula y calcular
+                cell.Formula = formula
+                
+                # LOGGING ADICIONAL PARA DIAGNÓSTICO
+                log(f"    🔍 Diagnóstico de fórmula:")
+                log(f"       Fórmula: {formula}")
+                log(f"       Rango: {col_letter}{header_row + 1}:{col_letter}{last_data_row}")
+                log(f"       Filas incluidas: {last_data_row - header_row}")
+                
+                try:
+                    cell.Calculate()
+                    valor = cell.Value
+                    log(f"    ℹ Valor calculado por SUBTOTAL: {valor}")
+                    
+                    # Mantener el valor
+                    if valor is not None:
+                        cell.Value = valor
+                        log(f"    ℹ Valor usado: {valor}")
+                except Exception as e:
+                    log(f"    ⚠ No se pudo calcular valor: {e}")
+                
+                # Aplicar formato
+                cell.NumberFormat = "#.##0"
+                
+                # Aplicar estilos visuales
+                cell.Font.Bold = True
+                cell.Interior.Color = header_color
+                
+                # Aplicar bordes
+                try:
+                    for border_id in [7, 8, 9, 10]:
+                        cell.Borders(border_id).LineStyle = 1
+                        cell.Borders(border_id).Weight = 2
+                        cell.Borders(border_id).ColorIndex = -4105
+                except Exception:
+                    pass
+                
+                # Verificar formato final
+                formato_final = cell.NumberFormat
+                valor_mostrado = cell.Text
+                log(f"    ℹ Formato final: '{formato_final}', Texto mostrado: '{valor_mostrado}'")
+                
+                subtotals_added += 1
+                log(f"    ✓ Subtotal EXISTENCIA en columna {exist_col}")             
+                       
+                
+            except Exception as e:
+                log(f"    ⚠ Error al agregar subtotal EXISTENCIA: {e}")
+                import traceback
+                log(traceback.format_exc())
+        
+        # Subtotal TOTAL INV
+        if total_inv_col:
+            try:
+                col_letter = _col_num_to_letter(total_inv_col)
+                formula = f"=SUBTOTAL(109,{col_letter}{header_row + 1}:{col_letter}{last_data_row})"
+                
+                cell = ws.Cells(subtotal_row, total_inv_col)
+                
+                # Aplicar fórmula
+                cell.Formula = formula
+                
+                # Aplicar estilos visuales
+                cell.Font.Bold = True
+                cell.Interior.Color = header_color
+                
+                # Copiar formato de celda superior
+                try:
+                    original_format = ws.Cells(last_data_row, total_inv_col).NumberFormat
+                    cell.NumberFormat = original_format
+                    log(f"    ℹ Formato aplicado a columna I: {original_format}")
+                except Exception as e:
+                    log(f"    ⚠ No se pudo copiar formato original: {e}")
+                
+                # Aplicar bordes
+                try:
+                    for border_id in [7, 8, 9, 10]:
+                        cell.Borders(border_id).LineStyle = 1
+                        cell.Borders(border_id).Weight = 2
+                        cell.Borders(border_id).ColorIndex = -4105
+                except Exception:
+                    pass
+                
+                subtotals_added += 1
+                log(f"    ✓ Subtotal TOTAL INV en columna {total_inv_col}")
+                
+            except Exception as e:
+                log(f"    ⚠ Error al agregar subtotal TOTAL INV: {e}")
+        
+        if subtotals_added > 0:
+            log(f"  ✅ {subtotals_added} subtotales agregados exitosamente con formato")
+        else:
+            log(f"  ⚠ No se pudieron agregar subtotales")
+        
+    except Exception as e:
+        log(f"  ⚠ Error al agregar subtotales finales: {e}")
+
+def _col_num_to_letter(col_num):
+    """Convierte número de columna a letra."""
+    letter = ''
+    while col_num > 0:
+        col_num, remainder = divmod(col_num - 1, 26)
+        letter = chr(65 + remainder) + letter
+    return letter
+
+
 def _ranges_without_pivots_for_column(col_idx: int, start_row: int, end_row: int, pivot_blocks):
     """Devuelve sub-rangos [a,b] dentro de [start_row,end_row] que NO cruzan pivots."""
     if end_row < start_row:
@@ -912,19 +1179,26 @@ def main():
     log(f"Encabezados detectados en fila {header_row_used} de INVENTARIO COPIA")
 
     ref_col_idx = find_reference_col_idx(hdrn_copia, ws_inv_copia, header_row_used)
-    last_row = ws_last_row(ws_inv_copia, ref_col_idx, header_row_used)
     start_data_row = header_row_used + 1
 
-    pivot_top = ws_first_pivot_row(ws_inv_copia)
-    if pivot_top and pivot_top > header_row_used:
-        last_row = min(last_row, pivot_top - 1)
+    # Detectar rango inicial solo para referencia
+    initial_last_row = ws_last_row(ws_inv_copia, ref_col_idx, header_row_used)
+    log(f"Rango inicial detectado: {initial_last_row - start_data_row + 1} filas")
+
+    # El last_row real se calculará después de pegar los datos
+    last_row = initial_last_row
 
     # 7) LIMPIAR columnas en INVENTARIO COPIA
-    log("Limpiando columnas en INVENTARIO COPIA...")
+    # IMPORTANTE: Calcular el rango máximo esperado ANTES de limpiar
+    log("Calculando rango esperado para limpieza...")
+    expected_rows = len(df_src["__REFERENCIA__"])
+    max_last_row = ws_ensure_range(ws_inv_copia, start_data_row, expected_rows, header_row_used)
+
+    log(f"Limpiando columnas en INVENTARIO COPIA (hasta fila {max_last_row})...")
     for colname in COLS_A_LIMPIAR:
         cidx = hdrn_copia.get(_norm(colname))
         if cidx:
-            ws_clear_column(ws_inv_copia, cidx, start_data_row, last_row)
+            ws_clear_column(ws_inv_copia, cidx, start_data_row, max_last_row)
             log(f"  - Limpiada columna: {colname}")
 
     # 8) Limpiar REFERENCIA FERTRAC en INV LISTA PRECIOS
@@ -1044,7 +1318,63 @@ def main():
     paste_if_exists("Sub- linea sistema", sublinea_sys)
     paste_if_exists("COSTO PROMEDIO", costo_prom)
 
-    last_row = max(last_row, start_data_row + len(ref_values) - 1)
+    log("Recalculando rango de datos después de pegar...")
+    new_last_row = start_data_row + len(ref_values) - 1
+
+    # Verificar si hay pivots que limiten el rango
+    pivot_top = ws_first_pivot_row(ws_inv_copia)
+    if pivot_top and pivot_top > header_row_used:
+        # Si los nuevos datos sobrepasan el pivot, advertir
+        if new_last_row >= pivot_top:
+            log(f"⚠ ADVERTENCIA: Los datos ({new_last_row} filas) sobrepasan el inicio de la tabla pivote (fila {pivot_top})")
+            log(f"  Se procesarán solo las filas hasta {pivot_top - 1}")
+            last_row = pivot_top - 1
+        else:
+            last_row = new_last_row
+    else:
+        last_row = new_last_row
+
+    log(f"Rango de datos actualizado: filas {start_data_row} a {last_row} ({last_row - start_data_row + 1} registros)")
+
+    # Actualizar el rango usado en la hoja para asegurar que Excel lo reconozca
+    try:
+        ws_inv_copia.UsedRange.Calculate()
+    except Exception as e:
+        log(f"Aviso: no se pudo recalcular UsedRange: {e}")
+
+    # APLICAR BORDES A TODO EL RANGO
+    log("Aplicando bordes a todo el rango de datos...")
+    try:
+        # Determinar rango de columnas
+        used_range = ws_inv_copia.UsedRange
+        first_col = used_range.Column
+        last_col = first_col + used_range.Columns.Count - 1
+        
+        # Aplicar bordes desde el encabezado hasta la última fila con datos
+        ws_apply_borders_to_range(ws_inv_copia, header_row_used, last_row, first_col, last_col)
+        
+    except Exception as e:
+        log(f"⚠ Error al aplicar bordes: {e}")
+        import traceback
+        log(traceback.format_exc())
+    log("Limpiando formato no deseado...")
+    try:
+        used_range = ws_inv_copia.UsedRange
+        first_col = used_range.Column
+        last_col = first_col + used_range.Columns.Count - 1
+        
+        # Limpiar formato en toda la zona de datos (excepto encabezado)
+        ws_remove_formatting_from_range(ws_inv_copia, start_data_row, last_row, first_col, last_col)
+        
+    except Exception as e:
+        log(f"⚠ Error al limpiar formato: {e}")
+
+    # ACTUALIZAR FÓRMULAS DE SUBTOTAL EN FILA 1
+    log("Actualizando fórmulas de subtotal en fila 1...")
+    try:
+        ws_update_subtotal_formula(ws_inv_copia, 1, last_row)
+    except Exception as e:
+        log(f"⚠ Error al actualizar fórmulas de subtotal: {e}")
 
     # 10) Arrastrar fórmulas en INVENTARIO COPIA
     log("Arrastrando fórmulas en INVENTARIO COPIA...")
@@ -1263,6 +1593,24 @@ def main():
         log(f"⚠ Error al traer columnas desde original: {e}")
         import traceback
         log(traceback.format_exc())
+
+    # AGREGAR SUBTOTALES FINALES (MOVIDO AQUÍ - DESPUÉS DE ESCRIBIR TODOS LOS DATOS)
+    log("Agregando subtotales finales...")
+    try:
+        ws_add_final_subtotals(ws_inv_copia, last_row, header_row_used, hdrn_copia)
+    except Exception as e:
+        log(f"⚠ Error al agregar subtotales finales: {e}")
+
+    # Inmovilizar las dos primeras filas
+    log("Inmovilizando las dos primeras filas...")
+    try:
+        # Seleccionar la celda A3 (fila 3, columna 1)
+        ws_inv_copia.Cells(3, 1).Select()
+        # Inmovilizar paneles
+        excel.ActiveWindow.FreezePanes = True
+        log("✓ Primeras dos filas inmovilizadas")
+    except Exception as e:
+        log(f"⚠ Error al inmovilizar paneles: {e}")
 
     # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
