@@ -2517,8 +2517,131 @@ def main():
         log(traceback.format_exc())
     
     log("=" * 60)
+    
+    # 16) Llenar EXISTENCIA (con fecha) en INV LISTA PRECIOS desde INVENTARIO COPIA
+    log("=" * 60)
+    log("PASO 16: Llenando EXISTENCIA (con fecha) en INV LISTA PRECIOS...")
+    try:
+        # Buscar la hoja INV LISTA PRECIOS
+        ws_lp = None
+        target_norm = _norm(SHEET_INV_LISTA)
+        
+        for i in range(1, wb.Worksheets.Count + 1):
+            sheet_name = wb.Worksheets(i).Name
+            if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                ws_lp = wb.Worksheets(i)
+                log(f"  ✓ Hoja encontrada: '{sheet_name}'")
+                break
+        
+        if ws_lp is None:
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                    ws_lp = wb.Worksheets(i)
+                    log(f"  ✓ Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                    break
+        
+        if ws_lp:
+            # Obtener encabezados de INV LISTA PRECIOS
+            hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
+            
+            # Buscar columna REFERENCIA FERTRAC en INV LISTA PRECIOS
+            ref_fertrac_idx_lp = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
+            
+            # Buscar columna EXISTENCIA (con fecha) en INV LISTA PRECIOS
+            # Buscar cualquier columna que empiece con "EXISTENCIA"
+            exist_col_lp = None
+            for name, col in hdr_lp.items():
+                if _norm(name).startswith("existencia "):
+                    exist_col_lp = col
+                    log(f"  ✓ Columna EXISTENCIA encontrada en INV LISTA PRECIOS: '{name}' (índice {col})")
+                    break
+            
+            if not ref_fertrac_idx_lp:
+                log("  ⚠ Columna REFERENCIA FERTRAC no encontrada en INV LISTA PRECIOS")
+            elif not exist_col_lp:
+                log("  ⚠ Columna EXISTENCIA no encontrada en INV LISTA PRECIOS")
+                log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
+            else:
+                # Actualizar el encabezado con la fecha actual
+                target_header = exist_col_title_for_today()
+                ws_lp.Cells(hr_lp, exist_col_lp).Value = target_header
+                log(f"  ✓ Encabezado actualizado a: '{target_header}'")
+                
+                # Determinar última fila con datos en INV LISTA PRECIOS
+                last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx_lp, hr_lp)
+                pivot_top_lp = ws_first_pivot_row(ws_lp)
+                if pivot_top_lp and pivot_top_lp > hr_lp:
+                    last_row_lp = min(last_row_lp, pivot_top_lp - 1)
+                
+                log(f"  📊 Procesando {last_row_lp - hr_lp} filas...")
+                
+                # Buscar columna EXISTENCIA en INVENTARIO COPIA
+                exist_col_inv_copia = None
+                for name, col in hdrn_copia.items():
+                    if name.startswith(_norm("EXISTENCIA")):
+                        exist_col_inv_copia = col
+                        break
+                
+                if not exist_col_inv_copia:
+                    log("  ⚠ Columna EXISTENCIA no encontrada en INVENTARIO COPIA")
+                else:
+                    log(f"  ✓ Columna EXISTENCIA encontrada en INVENTARIO COPIA: índice {exist_col_inv_copia}")
+                    
+                    # Leer REFERENCIA FERTRAC de INV LISTA PRECIOS
+                    refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx_lp)
+                    refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
+                    
+                    # Leer REFERENCIA y EXISTENCIA de INVENTARIO COPIA
+                    refs_inv_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
+                    refs_inv_copia_norm = [to_num_str(r) for r in refs_inv_copia]
+                    
+                    existencias_inv_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, exist_col_inv_copia)
+                    
+                    # Crear diccionario de REFERENCIA -> EXISTENCIA desde INVENTARIO COPIA
+                    exist_map_inv = dict(zip(refs_inv_copia_norm, existencias_inv_copia))
+                    
+                    # Cruzar y llenar EXISTENCIA en INV LISTA PRECIOS
+                    existencias_lp = []
+                    matched = 0
+                    
+                    for ref_fertrac in refs_fertrac_lp_norm:
+                        if ref_fertrac and ref_fertrac in exist_map_inv:
+                            exist_val = exist_map_inv[ref_fertrac]
+                            
+                            # Convertir a número si es posible
+                            try:
+                                if exist_val is not None and exist_val not in ("", "None"):
+                                    exist_num = float(exist_val)
+                                    existencias_lp.append(exist_num)
+                                    matched += 1
+                                else:
+                                    existencias_lp.append(0)
+                            except:
+                                existencias_lp.append(0)
+                        else:
+                            # No hay coincidencia
+                            existencias_lp.append(0)
+                    
+                    # Escribir en EXISTENCIA de INV LISTA PRECIOS
+                    write_range_as_array(ws_lp, hr_lp + 1, exist_col_lp, existencias_lp)
+                    
+                    log(f"  ✅ EXISTENCIA actualizada en INV LISTA PRECIOS:")
+                    log(f"     - Total procesado: {len(existencias_lp)}")
+                    log(f"     - Coincidencias encontradas: {matched}")
+                    log(f"     - Sin coincidencia (valor 0): {len(existencias_lp) - matched}")
+                    
+        else:
+            log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
+            
+    except Exception as e:
+        log(f"  ❌ ERROR al llenar EXISTENCIA en INV LISTA PRECIOS: {e}")
+        import traceback
+        log(traceback.format_exc())
+    
+    log("=" * 60)
 
-    # 16) GUARDADO COMO ARCHIVO NUEVO (SIN ORDENAR TODAVÍA)
+    # 17) GUARDADO COMO ARCHIVO NUEVO (SIN ORDENAR TODAVÍA)
     log("Preparando guardado del archivo...")
 
     try:
