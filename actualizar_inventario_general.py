@@ -623,7 +623,7 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
             return last_row
         
         # FASE 1: ELIMINAR REFERENCIAS TIPO "0041R"
-        log("  Fase 1: Identificando referencias tipo '####L' para eliminar...")
+        log("  Fase 1: Identificando referencias tipo '0041R' para eliminar...")
         cols_to_read = [ref_col_idx]
         data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
         referencias = data[ref_col_idx]
@@ -631,11 +631,11 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
         filas_a_eliminar = []
         for i in range(len(referencias)):
             ref = str(referencias[i]).strip() if referencias[i] not in (None, "", "None") else ""
-            if ref and re.match(r'^\d{4}[A-Za-z]$', ref):
+            if ref and ref.upper() == '0041R':
                 filas_a_eliminar.append((i, ref))
-        
+                    
         if filas_a_eliminar:
-            log(f"  Eliminando {len(filas_a_eliminar)} referencias tipo '####L':")
+            log(f"  Eliminando {len(filas_a_eliminar)} referencias tipo '0041R':")
             for idx, ref in filas_a_eliminar[:5]:
                 log(f"    - {ref}")
             if len(filas_a_eliminar) > 5:
@@ -778,6 +778,78 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
         import traceback
         log(traceback.format_exc())
         return last_row
+    
+
+def eliminar_registros_linea_copia_indeterminada(wsinvcopia, startdatarow: int, lastrow: int, 
+                                                  refcolidx: int, hdrncopia: dict) -> int:
+    """
+    Elimina los registros donde LINEA COPIA tenga valores indeterminados (#N/D).
+    Paso 21: Después de ajustar marcas propias, eliminar registros con LINEA COPIA = #N/D
+    """
+    try:
+        log("=" * 60)
+        log("PASO 21: Eliminando registros con LINEA COPIA indeterminada...")
+        
+        # Buscar columna LINEA COPIA usando las claves normalizadas del diccionario
+        collineacopia = hdrncopia.get(_norm("LINEA COPIA"))
+        
+        if not collineacopia:
+            log("  ⚠ Columna LINEA COPIA no encontrada")
+            return lastrow
+        
+        # Leer datos de REFERENCIA y LINEA COPIA
+        colstoread = [refcolidx, collineacopia]
+        data = read_multiple_columns_optimized(wsinvcopia, startdatarow, lastrow, colstoread)
+        
+        referencias = data[refcolidx]
+        lineascopia = data[collineacopia]
+        
+        # Identificar filas a eliminar
+        filas_a_eliminar = []
+        
+        log(f"  📊 Analizando {len(referencias)} registros...")
+        
+        for i in range(len(referencias)):
+            ref = str(referencias[i]).strip() if referencias[i] not in [None, "", "None"] else ""
+            linea = str(lineascopia[i]).strip() if lineascopia[i] not in [None, "", "None"] else ""
+            linea_upper = linea.upper()
+            
+            # Filtrar los indeterminados: #N/D, N/A, NA, etc.
+            if linea_upper in ["INDETERMINADO", "#N/D", "N/D", "NA", "N/A", "#N/A", "NONE", ""]:
+                filas_a_eliminar.append((i, ref, linea))
+        
+        # Eliminar filas
+        if filas_a_eliminar:
+            log(f"  🗑️ Eliminando {len(filas_a_eliminar)} registros con LINEA COPIA indeterminada...")
+            
+            # Mostrar algunos ejemplos
+            for idx, ref, linea in filas_a_eliminar[:5]:
+                log(f"    - Ref: {ref}, LINEA COPIA: '{linea}'")
+            if len(filas_a_eliminar) > 5:
+                log(f"    ... y {len(filas_a_eliminar) - 5} más")
+            
+            # Eliminar en orden inverso para no afectar índices
+            for idx, ref, linea in sorted(filas_a_eliminar, reverse=True):
+                fila_excel = startdatarow + idx
+                try:
+                    wsinvcopia.Rows(fila_excel).Delete()
+                except Exception as e:
+                    log(f"    ⚠ Error al eliminar fila {fila_excel} (Ref: {ref}): {e}")
+            
+            # Actualizar lastrow
+            lastrow = lastrow - len(filas_a_eliminar)
+            log(f"  ✓ {len(filas_a_eliminar)} filas eliminadas. Nuevo rango hasta fila {lastrow}")
+        else:
+            log("  ✓ No se encontraron registros con LINEA COPIA indeterminada para eliminar")
+        
+        log("=" * 60)
+        return lastrow
+        
+    except Exception as e:
+        log(f"  ❌ ERROR al eliminar registros con LINEA COPIA indeterminada: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return lastrow
 
 # ==== EXCEL COM ====
 def excel_open(path: Path, password: str | None = None):
@@ -1850,7 +1922,7 @@ def main():
 
     # Aplicar reglas de marcas propias 
     log("Aplicando reglas de negocio para marcas propias...")
-    aplicar_reglas_marcas_propias(
+    last_row = aplicar_reglas_marcas_propias(
         ws_inv_copia, 
         start_data_row, 
         last_row, 
@@ -1858,6 +1930,15 @@ def main():
         hdrn_copia, 
         marcas_propias, 
         distribucion
+    )
+
+    #Eliminar registros con LINEA COPIA indeterminada
+    last_row = eliminar_registros_linea_copia_indeterminada(
+        ws_inv_copia, 
+        start_data_row, 
+        last_row, 
+        ref_col_idx, 
+        hdrn_copia
     )
 
     # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
