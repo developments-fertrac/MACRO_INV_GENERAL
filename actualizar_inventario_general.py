@@ -620,9 +620,45 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
             log("  ⚠ No se encontraron columnas necesarias (LINEA COPIA o MARCA SISTEMA)")
             log(f"    LINEA COPIA: {'✓' if col_linea_copia else '✗'}")
             log(f"    MARCA SISTEMA: {'✓' if col_marca_sistema else '✗'}")
-            return
+            return last_row
         
+        # FASE 1: ELIMINAR REFERENCIAS TIPO "0041R"
+        log("  Fase 1: Identificando referencias tipo '####L' para eliminar...")
+        cols_to_read = [ref_col_idx]
+        data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
+        referencias = data[ref_col_idx]
         
+        filas_a_eliminar = []
+        for i in range(len(referencias)):
+            ref = str(referencias[i]).strip() if referencias[i] not in (None, "", "None") else ""
+            if ref and re.match(r'^\d{4}[A-Za-z]$', ref):
+                filas_a_eliminar.append((i, ref))
+        
+        if filas_a_eliminar:
+            log(f"  Eliminando {len(filas_a_eliminar)} referencias tipo '####L':")
+            for idx, ref in filas_a_eliminar[:5]:
+                log(f"    - {ref}")
+            if len(filas_a_eliminar) > 5:
+                log(f"    ... y {len(filas_a_eliminar) - 5} más")
+            
+            # Eliminar en orden inverso
+            for idx, ref in sorted(filas_a_eliminar, reverse=True):
+                fila_excel = start_data_row + idx
+                try:
+                    ws_inv_copia.Rows(fila_excel).Delete()
+                except Exception as e:
+                    log(f"    ⚠ Error al eliminar fila {fila_excel} ({ref}): {e}")
+            
+            # Actualizar last_row
+            last_row = last_row - len(filas_a_eliminar)
+            log(f"  {len(filas_a_eliminar)} filas eliminadas. Nuevo rango: hasta fila {last_row}")
+        else:
+            log("  No se encontraron referencias tipo '####L' para eliminar")
+        
+        # FASE 2: APLICAR FILTROS Y ACTUALIZAR COLUMNAS
+        log("  Fase 2: Aplicando filtros y actualizando campos...")
+        
+        # Volver a leer los datos DESPUÉS de eliminar filas
         cols_to_read = [ref_col_idx, col_linea_copia, col_marca_sistema]
         data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
         
@@ -631,67 +667,44 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
         marcas_sistema = data[col_marca_sistema]
         
         filas_a_procesar = []
-        filas_a_eliminar = []
-       
-        filtro1_rechazados = 0
-        filtro2_rechazados = 0
-
-        log(f"  Analizando {len(referencias)} registros...")
+        
+        log(f"  Analizando {len(referencias)} registros con filtros...")
         
         for i in range(len(referencias)):
             ref = str(referencias[i]).strip() if referencias[i] not in (None, "", "None") else ""
             linea = str(lineas_copia[i]).strip() if lineas_copia[i] not in (None, "", "None") else ""
             marca = str(marcas_sistema[i]).strip() if marcas_sistema[i] not in (None, "", "None") else ""
             
-            if ref and re.match(r'^\d{4}[A-Za-z]$', ref):
-                filas_a_eliminar.append((i, ref))
-                continue
-            
             linea_upper = linea.upper()
             marca_upper = marca.upper()
             
-            if linea or linea_upper in ("INDETERMINADO", "#N/D", "#N/A", "N/A", "NA", "NONE"):
+            # Filtro 1: LINEA COPIA debe estar vacía o ser INDETERMINADO/#N/D
+            if linea and linea_upper not in ("INDETERMINADO", "#N/D", "#N/A", "N/A", "NA", "NONE"):
                 continue
             
+            # Filtro 2: MARCA SISTEMA debe estar en marcas propias
             if marca_upper not in marcas_propias:
                 continue
             
+            # Si pasa ambos filtros, agregar a procesar
             filas_a_procesar.append((i, ref, marca))
-        
-
-        # Eliminar filas tipo "0041R" (en orden inverso para no afectar índices)
-        if filas_a_eliminar:
-            log(f"  Eliminando referencias tipo '####L':")
-            for idx, ref in filas_a_eliminar[:5]:  
-                log(f"    - {ref}")
-            if len(filas_a_eliminar) > 5:
-                log(f"    ... y {len(filas_a_eliminar) - 5} más")
-            
-            for idx, ref in sorted(filas_a_eliminar, reverse=True):
-                fila_excel = start_data_row + idx
-                try:
-                    ws_inv_copia.Rows(fila_excel).Delete()
-                except Exception as e:
-                    log(f"    ⚠ Error al eliminar fila {fila_excel} ({ref}): {e}")
-            
-            log(f"{len(filas_a_eliminar)} filas eliminadas")
-            
-            # Recalcular last_row después de eliminar
-            last_row = last_row - len(filas_a_eliminar)
-            log(f"  Nuevo rango de datos: hasta fila {last_row}")
         
         if not filas_a_procesar:
             log("  ℹ No hay registros para procesar después de aplicar filtros")
-            return
+            return last_row
         
-        log(f"  Procesando {len(filas_a_procesar)} registros ...")
+        log(f"  {len(filas_a_procesar)} registros cumplen los filtros")
+        
+        # FASE 3: ACTUALIZAR CAMPOS
+        log("  Fase 3: Actualizando campos...")
         
         gestor_map = distribucion.get('gestor', {})
         clasif_map = distribucion.get('clasificacion', {})
         
+        # Construir diccionario de actualizaciones con FILAS EXCEL CORRECTAS
         updates = {}
         for idx, ref, marca in filas_a_procesar:
-            fila_excel = start_data_row + idx
+            fila_excel = start_data_row + idx  # Esta es la fila DESPUÉS de eliminar
             marca_upper = marca.upper().strip()
             
             updates[fila_excel] = {
@@ -703,95 +716,68 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 'clasificacion': clasif_map.get(marca_upper, "")
             }
         
+        # Ordenar filas para actualizaciones eficientes
         filas_ordenadas = sorted(updates.keys())
         
-        def agrupar_contiguos(filas):
-            """Agrupa filas contiguas para actualización por rangos"""
-            if not filas:
-                return []
-            grupos = []
-            inicio = filas[0]
-            fin = filas[0]
-            for fila in filas[1:]:
-                if fila == fin + 1:
-                    fin = fila
-                else:
-                    grupos.append((inicio, fin))
-                    inicio = fin = fila
-            grupos.append((inicio, fin))
-            return grupos
-        
-        grupos_contiguos = agrupar_contiguos(filas_ordenadas)
-        
-        columnas_actualizadas = 0
+        # Estadísticas
         lideres_encontrados = sum(1 for v in updates.values() if v['lider'])
         clasif_encontradas = sum(1 for v in updates.values() if v['clasificacion'])
         
+        log(f"  Actualizando {len(updates)} registros ({lideres_encontrados} con líder, {clasif_encontradas} con clasificación)...")
+        
+        # Actualizar columnas una por una
+        columnas_actualizadas = 0
+        
         if col_marca_copia:
-            for inicio, fin in grupos_contiguos:
-                valores = [updates[f]['marca'] for f in range(inicio, fin + 1)]
-                rng = ws_inv_copia.Range(
-                    ws_inv_copia.Cells(inicio, col_marca_copia),
-                    ws_inv_copia.Cells(fin, col_marca_copia)
-                )
-                rng.Value = [[v] for v in valores]
+            valores = [updates[f]['marca'] for f in filas_ordenadas]
+            for i, fila in enumerate(filas_ordenadas):
+                ws_inv_copia.Cells(fila, col_marca_copia).Value = valores[i]
             columnas_actualizadas += 1
+            log(f"    ✓ MARCA copia actualizada")
         
         if col_inv_bodega_ger:
-            for inicio, fin in grupos_contiguos:
-                valores = [updates[f]['inv_bodega'] for f in range(inicio, fin + 1)]
-                rng = ws_inv_copia.Range(
-                    ws_inv_copia.Cells(inicio, col_inv_bodega_ger),
-                    ws_inv_copia.Cells(fin, col_inv_bodega_ger)
-                )
-                rng.Value = [[v] for v in valores]
+            for fila in filas_ordenadas:
+                ws_inv_copia.Cells(fila, col_inv_bodega_ger).Value = "0"
             columnas_actualizadas += 1
+            log(f"    ✓ INV BODEGA GERENCIA actualizada")
         
         if col_linea_copia:
-            for inicio, fin in grupos_contiguos:
-                valores = [updates[f]['linea'] for f in range(inicio, fin + 1)]
-                rng = ws_inv_copia.Range(
-                    ws_inv_copia.Cells(inicio, col_linea_copia),
-                    ws_inv_copia.Cells(fin, col_linea_copia)
-                )
-                rng.Value = [[v] for v in valores]
+            valores = [updates[f]['linea'] for f in filas_ordenadas]
+            for i, fila in enumerate(filas_ordenadas):
+                ws_inv_copia.Cells(fila, col_linea_copia).Value = valores[i]
             columnas_actualizadas += 1
+            log(f"    ✓ LINEA COPIA actualizada")
         
         if col_sublinea_copia:
-            for inicio, fin in grupos_contiguos:
-                valores = [updates[f]['sublinea'] for f in range(inicio, fin + 1)]
-                rng = ws_inv_copia.Range(
-                    ws_inv_copia.Cells(inicio, col_sublinea_copia),
-                    ws_inv_copia.Cells(fin, col_sublinea_copia)
-                )
-                rng.Value = [[v] for v in valores]
+            valores = [updates[f]['sublinea'] for f in filas_ordenadas]
+            for i, fila in enumerate(filas_ordenadas):
+                ws_inv_copia.Cells(fila, col_sublinea_copia).Value = valores[i]
             columnas_actualizadas += 1
+            log(f"    ✓ SUB-LINEA COPIA actualizada")
         
         if col_lider_linea:
-            for inicio, fin in grupos_contiguos:
-                valores = [updates[f]['lider'] for f in range(inicio, fin + 1)]
-                rng = ws_inv_copia.Range(
-                    ws_inv_copia.Cells(inicio, col_lider_linea),
-                    ws_inv_copia.Cells(fin, col_lider_linea)
-                )
-                rng.Value = [[v] for v in valores]
+            valores = [updates[f]['lider'] for f in filas_ordenadas]
+            for i, fila in enumerate(filas_ordenadas):
+                ws_inv_copia.Cells(fila, col_lider_linea).Value = valores[i]
             columnas_actualizadas += 1
+            log(f"    ✓ LIDER LINEA actualizada ({lideres_encontrados} valores)")
         
         if col_clasificacion:
-            for inicio, fin in grupos_contiguos:
-                valores = [updates[f]['clasificacion'] for f in range(inicio, fin + 1)]
-                rng = ws_inv_copia.Range(
-                    ws_inv_copia.Cells(inicio, col_clasificacion),
-                    ws_inv_copia.Cells(fin, col_clasificacion)
-                )
-                rng.Value = [[v] for v in valores]
+            valores = [updates[f]['clasificacion'] for f in filas_ordenadas]
+            for i, fila in enumerate(filas_ordenadas):
+                ws_inv_copia.Cells(fila, col_clasificacion).Value = valores[i]
             columnas_actualizadas += 1
+            log(f"    ✓ CLASIFICACION actualizada ({clasif_encontradas} valores)")
         
-        log(f" Proceso completado:")
+        log(f"  ✅ Proceso completado: {columnas_actualizadas} columnas actualizadas en {len(updates)} registros")
+        
+        return last_row
+        
     except Exception as e:
         log(f"  ⚠ ERROR al aplicar reglas de marcas propias: {e}")
         import traceback
         log(traceback.format_exc())
+        return last_row
 
 # ==== EXCEL COM ====
 def excel_open(path: Path, password: str | None = None):
