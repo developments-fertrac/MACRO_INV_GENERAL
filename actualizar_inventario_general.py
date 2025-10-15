@@ -850,6 +850,169 @@ def eliminar_registros_linea_copia_indeterminada(wsinvcopia, startdatarow: int, 
         import traceback
         log(traceback.format_exc())
         return lastrow
+    
+def procesar_existencias_negativas_y_cero(ws_inv_copia, start_data_row: int, last_row: int, 
+                                          ref_col_idx: int, hdrn_copia: dict, base_path: Path) -> int:
+    """
+    Paso 22: Filtra EXISTENCIA (fecha actual) negativos y ceros.
+    - Notifica los NEGATIVOS en un Excel nuevo
+    - Cambia EXISTENCIA y COSTO PROMEDIO a 0 SOLO para los NEGATIVOS
+    """
+    try:
+        log("=" * 60)
+        log("PASO 22: Procesando existencias negativas...")
+        
+        # Buscar columnas necesarias
+        col_existencia = None
+        for name, col in hdrn_copia.items():
+            if name.startswith(_norm("EXISTENCIA")):
+                col_existencia = col
+                break
+        
+        col_costo_promedio = hdrn_copia.get(_norm("COSTO PROMEDIO"))
+        
+        if not col_existencia:
+            log("  ⚠ Columna EXISTENCIA no encontrada")
+            return last_row
+        
+        if not col_costo_promedio:
+            log("  ⚠ Columna COSTO PROMEDIO no encontrada")
+        
+        # Leer todas las columnas relevantes para el reporte
+        cols_reporte = [ref_col_idx, col_existencia]
+        col_nombre_myr = hdrn_copia.get(_norm("NOMBRE MYR"))
+        col_marca_copia = hdrn_copia.get(_norm("MARCA COPIA"))
+        col_linea_copia = hdrn_copia.get(_norm("LINEA COPIA"))
+        
+        if col_nombre_myr:
+            cols_reporte.append(col_nombre_myr)
+        if col_marca_copia:
+            cols_reporte.append(col_marca_copia)
+        if col_linea_copia:
+            cols_reporte.append(col_linea_copia)
+        if col_costo_promedio:
+            cols_reporte.append(col_costo_promedio)
+        
+        data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_reporte)
+        
+        referencias = data[ref_col_idx]
+        existencias = data[col_existencia]
+        
+        # Identificar SOLO registros negativos
+        registros_negativos = []
+        
+        log(f"  📊 Analizando {len(referencias)} registros...")
+        
+        for i in range(len(referencias)):
+            ref = str(referencias[i]).strip() if referencias[i] not in [None, "", "None"] else ""
+            
+            try:
+                exist_val = float(existencias[i]) if existencias[i] not in [None, "", "None"] else 0.0
+            except:
+                exist_val = 0.0
+            
+            # SOLO identificar negativos (ignorar ceros)
+            if exist_val < 0:
+                # Limpiar la referencia para eliminar .0 innecesario
+                ref_limpia = ref
+                try:
+                    # Si es un número entero con .0, quitarlo
+                    if '.' in ref and ref.replace('.', '').replace('-', '').isdigit():
+                        num_float = float(ref)
+                        if abs(num_float - int(num_float)) < 1e-9:  # Es entero
+                            ref_limpia = str(int(num_float))
+                except:
+                    pass  # Mantener ref original si no se puede convertir
+                
+                registro = {
+                    'indice': i,
+                    'referencia': ref_limpia,  # ← Usar la referencia limpia
+                    'existencia': exist_val
+                }
+                
+                if col_nombre_myr:
+                    registro['nombre'] = data[col_nombre_myr][i]
+                if col_marca_copia:
+                    registro['marca'] = data[col_marca_copia][i]
+                if col_linea_copia:
+                    registro['linea'] = data[col_linea_copia][i]
+                if col_costo_promedio:
+                    registro['costo'] = data[col_costo_promedio][i]
+                
+                registros_negativos.append(registro)                
+                   
+        # Generar Excel con registros negativos
+        if registros_negativos:
+            log(f"  🚨 Se encontraron {len(registros_negativos)} registros con EXISTENCIA NEGATIVA")
+            
+            try:
+                # Crear DataFrame para exportar
+                df_negativos = pd.DataFrame(registros_negativos)
+                
+                # Renombrar columnas
+                rename_map = {
+                    'referencia': 'REFERENCIA',
+                    'existencia': 'EXISTENCIA',
+                    'nombre': 'NOMBRE',
+                    'marca': 'MARCA',
+                    'linea': 'LINEA',
+                    'costo': 'COSTO PROMEDIO'
+                }
+                df_negativos = df_negativos.rename(columns=rename_map)
+                
+                # Eliminar columna de índice
+                if 'indice' in df_negativos.columns:
+                    df_negativos = df_negativos.drop(columns=['indice'])
+                
+                # Generar nombre del archivo
+                fecha_actual = datetime.now().strftime("%Y%m%d_%H%M")
+                nombre_reporte = f"REPORTE_EXISTENCIAS_NEGATIVAS_{fecha_actual}.xlsx"
+                ruta_reporte = base_path / nombre_reporte
+                
+                # Guardar Excel
+                df_negativos.to_excel(ruta_reporte, index=False, engine='openpyxl')
+                log(f"  ✅ Reporte generado: {nombre_reporte}")
+                log(f"     📁 Ubicación: {ruta_reporte}")
+                
+                # Mostrar ejemplos
+                for reg in registros_negativos:
+                    log(f"    - Ref: {reg['referencia']}, EXISTENCIA: {reg['existencia']}")
+                    
+            except Exception as e:
+                log(f"  ⚠ Error al generar reporte de negativos: {e}")
+                import traceback
+                log(traceback.format_exc())
+            
+            # Cambiar a 0 SOLO los registros negativos
+            log(f"  🔄 Cambiando a 0: {len(registros_negativos)} registros negativos")
+            
+            # Modificar EXISTENCIA y COSTO PROMEDIO solo para negativos
+            for reg in registros_negativos:
+                fila_excel = start_data_row + reg['indice']
+                try:
+                    # Cambiar EXISTENCIA a 0
+                    ws_inv_copia.Cells(fila_excel, col_existencia).Value = 0
+                    
+                    # Cambiar COSTO PROMEDIO a 0 si existe
+                    if col_costo_promedio:
+                        ws_inv_copia.Cells(fila_excel, col_costo_promedio).Value = 0
+                        
+                except Exception as e:
+                    log(f"    ⚠ Error al actualizar fila {fila_excel} (Ref: {reg['referencia']}): {e}")
+            
+            log(f"  ✓ {len(registros_negativos)} registros negativos actualizados a 0")
+        else:
+            log("  ✓ No se encontraron registros con EXISTENCIA negativa")
+        
+        log("=" * 60)
+        return last_row
+        
+    except Exception as e:
+        log(f"  ❌ ERROR al procesar existencias negativas: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return last_row
+
 
 # ==== EXCEL COM ====
 def excel_open(path: Path, password: str | None = None):
@@ -1940,7 +2103,15 @@ def main():
         ref_col_idx, 
         hdrn_copia
     )
-
+    #Procesar existencias negativas y cero
+    last_row = procesar_existencias_negativas_y_cero(
+        ws_inv_copia,
+        start_data_row,
+        last_row,
+        ref_col_idx,
+        hdrn_copia,
+        BASE_PATH
+    )
     # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
     try:
