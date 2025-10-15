@@ -364,6 +364,7 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
 def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
     """
     Carga el archivo MATRIZ USD, hoja 2025.
+    Retorna REFERENCIA FERTRAC, DESCRIPCION LISTA y REFERENCIA LISTA DE PRECIOS
     """
     try:
         p = find_by_prefix(base_dir, PFX_MATRIZ_USD)
@@ -408,6 +409,7 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
       
         idx = {_norm(c): c for c in df.columns}
         
+        # 🔍 BUSCAR: REFERENCIA INVENTARIO FERTRAC
         ref_col = None
         for col_name in df.columns:
             col_norm = _norm(col_name)
@@ -425,6 +427,7 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
                         log(f"  Usando columna '{col_name}' como REFERENCIA (detectada por patrón)")
                         break
         
+        # 🔍 BUSCAR: DESCRIPCION LISTA PRECIOS
         desc_col = None
         for col_name in df.columns:
             col_norm = _norm(col_name)
@@ -445,31 +448,67 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
                         log(f"  Usando columna '{col_name}' como DESCRIPCION (detectada por longitud)")
                         break
         
+        # 🆕 BUSCAR: REFERENCIA LISTA DE PRECIOS
+        ref_lista_col = None
+        for col_name in df.columns:
+            col_norm = _norm(col_name)
+            # Buscar variantes del nombre
+            if ("referencia" in col_norm and "lista" in col_norm and "precio" in col_norm):
+                ref_lista_col = col_name
+                log(f"  ✓ Columna REFERENCIA LISTA DE PRECIOS encontrada: '{col_name}'")
+                break
+        
+        # Si no se encuentra por nombre exacto, buscar alternativas
+        if not ref_lista_col:
+            for col_name in df.columns:
+                col_norm = _norm(col_name)
+                if col_name == ref_col or col_name == desc_col:
+                    continue
+                # Buscar "REF LISTA", "CODIGO LISTA", etc.
+                if ("ref" in col_norm or "codigo" in col_norm) and "lista" in col_norm:
+                    ref_lista_col = col_name
+                    log(f"  ✓ Columna REFERENCIA LISTA encontrada (alternativa): '{col_name}'")
+                    break
+        
         if not ref_col:
             raise KeyError(f"No encontré columna 'REFERENCIA INVENTARIO FERTRAC' en {p.name}. Columnas: {list(df.columns)}")
         if not desc_col:
             raise KeyError(f"No encontré columna 'DESCRIPCION LISTA PRECIOS' en {p.name}. Columnas: {list(df.columns)}")
         
-       
+        # ⚠️ ADVERTENCIA si no se encuentra REFERENCIA LISTA
+        if not ref_lista_col:
+            log(f"  ⚠ ADVERTENCIA: No se encontró columna 'REFERENCIA LISTA DE PRECIOS' en {p.name}")
+            log(f"     Columnas disponibles: {list(df.columns)}")
+        
         df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
         
         out = pd.DataFrame()
         out["__REF_MATRIZ__"] = df[ref_col].apply(to_num_str)
         out["__DESC_LISTA__"] = df[desc_col].fillna("")
         
+        # 🆕 Agregar REFERENCIA LISTA DE PRECIOS
+        if ref_lista_col:
+            out["__REF_LISTA_PRECIOS__"] = df[ref_lista_col].apply(to_num_str)
+        else:
+            out["__REF_LISTA_PRECIOS__"] = ""  # Columna vacía si no se encuentra
+        
         out = out.drop_duplicates(subset=["__REF_MATRIZ__"], keep="first")
+        
+        log(f"  ✓ Matriz USD cargada: {len(out)} referencias")
+        if ref_lista_col:
+            no_vacias = out["__REF_LISTA_PRECIOS__"].astype(str).str.strip().ne("").sum()
+            log(f"  ✓ REFERENCIA LISTA DE PRECIOS: {no_vacias} valores encontrados")
         
         return out
         
     except FileNotFoundError:
-        log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MATRIZ_USD}'. Se continuará sin actualizar NOMBRE LISTA desde Matriz USD.")
-        return pd.DataFrame(columns=["__REF_MATRIZ__", "__DESC_LISTA__"])
+        log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MATRIZ_USD}'.")
+        return pd.DataFrame(columns=["__REF_MATRIZ__", "__DESC_LISTA__", "__REF_LISTA_PRECIOS__"])
     except Exception as e:
         log(f"⚠ ERROR al cargar Matriz USD: {e}")
         import traceback
         log(traceback.format_exc())
-        log(f"  Se continuará sin actualizar NOMBRE LISTA desde Matriz USD.")
-        return pd.DataFrame(columns=["__REF_MATRIZ__", "__DESC_LISTA__"])
+        return pd.DataFrame(columns=["__REF_MATRIZ__", "__DESC_LISTA__", "__REF_LISTA_PRECIOS__"])
     
 def cargar_marcas(base_dir: Path) -> set:
     """
@@ -1690,6 +1729,12 @@ def main():
     matriz_map = df_matriz_usd.set_index("__REF_MATRIZ__")["__DESC_LISTA__"].to_dict() if len(df_matriz_usd) > 0 else {}
     log(f"Matriz USD: {len(matriz_map)} referencias disponibles para actualizar NOMBRE LISTA")
 
+    # 🆕 AGREGAR: Crear diccionario para REFERENCIA LISTA DE PRECIOS
+    matriz_map_ref_lista = df_matriz_usd.set_index("__REF_MATRIZ__")["__REF_LISTA_PRECIOS__"].to_dict() if len(df_matriz_usd) > 0 else {}
+    if len(matriz_map_ref_lista) > 0:
+        no_vacias = sum(1 for v in matriz_map_ref_lista.values() if v and str(v).strip() not in ("", "0", "None"))
+        log(f"Matriz USD: {no_vacias} referencias de lista de precios disponibles")
+
     # Cargar archivos auxiliares para marcas propias
     marcas_propias = cargar_marcas(BASE_PATH)
     log(f"Marcas propias: {len(marcas_propias)} marcas cargadas")
@@ -2249,8 +2294,9 @@ def main():
         BASE_PATH
     )
 
-# 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
-    log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
+    # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
+    log("=" * 60)
+    log("PASO 14: Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
     try:
         ws_lp = None
         target_norm = _norm(SHEET_INV_LISTA)
@@ -2273,29 +2319,206 @@ def main():
             ref_fertrac_idx = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
             
             if ref_fertrac_idx:
+                log(f"  ✓ Columna REFERENCIA FERTRAC encontrada en índice {ref_fertrac_idx}")
+                
+                # Leer referencias desde INVENTARIO COPIA
                 referencias_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
                 referencias_copia = [r for r in referencias_copia if r is not None and str(r).strip()]
                 
-                last_row_lp = hr_lp + len(referencias_copia)
-                write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
+                log(f"  📊 {len(referencias_copia)} referencias a copiar")
                 
-                try:
-                    rng = ws_lp.Range(ws_lp.Cells(hr_lp + 1, ref_fertrac_idx), 
-                                     ws_lp.Cells(last_row_lp, ref_fertrac_idx))
+                # 🔥 APLICAR CORRECCIÓN PARA REFERENCIAS CON "/"
+                has_slash = any("/" in str(v) for v in referencias_copia if v not in (None, "", "None"))
+                
+                if has_slash:
+                    log(f"  ⚠️  Detectadas referencias con '/' - aplicando formato especial")
+                    
+                    last_row_lp = hr_lp + len(referencias_copia)
+                    
+                    # 1️⃣ PASO 1: Establecer formato de TEXTO primero
+                    rng = ws_lp.Range(
+                        ws_lp.Cells(hr_lp + 1, ref_fertrac_idx),
+                        ws_lp.Cells(last_row_lp, ref_fertrac_idx)
+                    )
+                    
+                    rng.NumberFormat = "@"  # Formato TEXTO para evitar división
+                    log(f"     ✓ Formato de texto aplicado")
+                    
+                    # 2️⃣ PASO 2: Convertir valores apropiadamente
+                    try:
+                        converted_values = []
+                        slash_count = 0
+                        numeric_count = 0
+                        
+                        for v in referencias_copia:
+                            if v in (None, "", "None"):
+                                converted_values.append([""])
+                            elif "/" in str(v):
+                                # Mantener como TEXTO si tiene "/"
+                                converted_values.append([str(v)])
+                                slash_count += 1
+                            elif not str(v).replace(".", "").replace("-", "").isdigit():
+                                # Mantener como texto si no es numérico
+                                converted_values.append([str(v)])
+                            else:
+                                # Convertir a número si es numérico puro
+                                try:
+                                    converted_values.append([float(v)])
+                                    numeric_count += 1
+                                except:
+                                    converted_values.append([str(v)])
+                        
+                        rng.Value = converted_values
+                        log(f"     ✓ Valores escritos: {slash_count} con '/', {numeric_count} numéricos")
+                        
+                    except Exception as e:
+                        log(f"     ⚠️  Aviso en conversión: {e}")
+                        # Fallback: escribir directamente
+                        write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
+                    
+                    # 3️⃣ PASO 3: Aplicar formato numérico pero mantener alineación izquierda
                     rng.NumberFormat = "0"
-                except Exception as e:
-                    log(f"Aviso: no se pudo aplicar formato numérico: {e}")
+                    rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
+                    log(f"     ✓ Formato numérico '0' aplicado con alineación izquierda")
+                    
+                    # 4️⃣ PASO 4: Ignorar advertencias de "número almacenado como texto"
+                    try:
+                        for i in range(1, 8):
+                            try:
+                                rng.Errors.Item(i).Ignore = True
+                            except:
+                                pass
+                        ws_lp.Parent.Application.ErrorCheckingOptions.NumberAsText = False
+                        log(f"     ✓ Advertencias de Excel desactivadas")
+                    except Exception as e:
+                        log(f"     ⚠️  No se pudieron desactivar advertencias: {e}")
+                    
+                    log(f"  ✅ {len(referencias_copia)} referencias copiadas con formato especial")
+                    
+                else:
+                    # Si NO hay referencias con "/", usar el método normal
+                    log(f"  ℹ️  No se detectaron referencias con '/' - usando método estándar")
+                    last_row_lp = hr_lp + len(referencias_copia)
+                    write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
+                    
+                    # Aplicar formato numérico
+                    try:
+                        rng = ws_lp.Range(ws_lp.Cells(hr_lp + 1, ref_fertrac_idx), 
+                                         ws_lp.Cells(last_row_lp, ref_fertrac_idx))
+                        rng.NumberFormat = "0"
+                        log(f"     ✓ Formato numérico '0' aplicado")
+                    except Exception as e:
+                        log(f"     ⚠️  No se pudo aplicar formato numérico: {e}")
+                    
+                    log(f"  ✅ {len(referencias_copia)} referencias copiadas")
                 
-                log(f"{len(referencias_copia)} referencias copiadas a REFERENCIA FERTRAC")
             else:
-                log("No se encontró columna REFERENCIA FERTRAC")
+                log("  ⚠️  No se encontró columna REFERENCIA FERTRAC")
         else:
-            log("No se encontró la hoja INV LISTA PRECIOS")
+            log("  ⚠️  No se encontró la hoja INV LISTA PRECIOS")
             
     except Exception as e:
-        log(f"Error al llenar REFERENCIA FERTRAC: {e}")
+        log(f"  ❌ ERROR al llenar REFERENCIA FERTRAC: {e}")
+        import traceback
+        log(traceback.format_exc())
+    
+    log("=" * 60)
 
-    # 15) GUARDADO COMO ARCHIVO NUEVO (SIN ORDENAR TODAVÍA)
+    # 15) Llenar REFERENCIA LISTA DE PRECIOS en INV LISTA PRECIOS desde MATRIZ USD
+    log("=" * 60)
+    log("PASO 15: Llenando REFERENCIA LISTA DE PRECIOS desde MATRIZ USD...")
+    try:
+        # Verificar que tenemos datos de Matriz USD
+        if len(matriz_map_ref_lista) == 0:
+            log("  ⚠ No hay datos de REFERENCIA LISTA DE PRECIOS en Matriz USD - saltando")
+        else:
+            # Buscar la hoja INV LISTA PRECIOS
+            ws_lp = None
+            target_norm = _norm(SHEET_INV_LISTA)
+            
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name = wb.Worksheets(i).Name
+                if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                    ws_lp = wb.Worksheets(i)
+                    log(f"  ✓ Hoja encontrada: '{sheet_name}'")
+                    break
+            
+            if ws_lp is None:
+                for i in range(1, wb.Worksheets.Count + 1):
+                    sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                    if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                        ws_lp = wb.Worksheets(i)
+                        log(f"  ✓ Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                        break
+            
+            if ws_lp:
+                # Obtener encabezados de INV LISTA PRECIOS
+                hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
+                
+                # Buscar columnas necesarias
+                ref_fertrac_idx = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
+                ref_lista_idx = hdrn_lp.get(_norm("REFERENCIA LISTA DE PRECIOS")) or \
+                               hdrn_lp.get(_norm("REFERENCIA LISTA")) or \
+                               hdrn_lp.get(_norm("REF LISTA PRECIOS"))
+                
+                if not ref_fertrac_idx:
+                    log("  ⚠ Columna REFERENCIA FERTRAC no encontrada en INV LISTA PRECIOS")
+                elif not ref_lista_idx:
+                    log("  ⚠ Columna REFERENCIA LISTA DE PRECIOS no encontrada en INV LISTA PRECIOS")
+                    log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
+                else:
+                    log(f"  ✓ Columnas encontradas:")
+                    log(f"     - REFERENCIA FERTRAC: índice {ref_fertrac_idx}")
+                    log(f"     - REFERENCIA LISTA DE PRECIOS: índice {ref_lista_idx}")
+                    
+                    # Determinar última fila con datos
+                    last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx, hr_lp)
+                    pivot_top_lp = ws_first_pivot_row(ws_lp)
+                    if pivot_top_lp and pivot_top_lp > hr_lp:
+                        last_row_lp = min(last_row_lp, pivot_top_lp - 1)
+                    
+                    log(f"  📊 Procesando {last_row_lp - hr_lp} filas...")
+                    
+                    # Leer REFERENCIA FERTRAC de INV LISTA PRECIOS
+                    refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx)
+                    refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
+                    
+                    # Cruzar con MATRIZ USD para obtener REFERENCIA LISTA DE PRECIOS
+                    refs_lista_precios = []
+                    matched = 0
+
+                    for ref_fertrac in refs_fertrac_lp_norm:
+                        if ref_fertrac and ref_fertrac in matriz_map_ref_lista:
+                            ref_lista_val = matriz_map_ref_lista[ref_fertrac]
+                            # Validar que no esté vacío (PERO ACEPTAR "0" como valor válido)
+                            if ref_lista_val is not None and str(ref_lista_val).strip() not in ("", "None", "nan"):
+                                # ✅ ACEPTA "0" como valor válido
+                                refs_lista_precios.append(str(ref_lista_val).strip())
+                                matched += 1
+                            else:
+                                refs_lista_precios.append("")
+                        else:
+                            refs_lista_precios.append("")
+                            
+                    # Escribir en REFERENCIA LISTA DE PRECIOS
+                    write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                    
+                    log(f"  ✅ REFERENCIA LISTA DE PRECIOS actualizada:")
+                    log(f"     - Total procesado: {len(refs_lista_precios)}")
+                    log(f"     - Coincidencias encontradas: {matched}")
+                    log(f"     - Sin coincidencia: {len(refs_lista_precios) - matched}")
+                    
+            else:
+                log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
+                
+    except Exception as e:
+        log(f"  ❌ ERROR al llenar REFERENCIA LISTA DE PRECIOS: {e}")
+        import traceback
+        log(traceback.format_exc())
+    
+    log("=" * 60)
+
+    # 16) GUARDADO COMO ARCHIVO NUEVO (SIN ORDENAR TODAVÍA)
     log("Preparando guardado del archivo...")
 
     try:
