@@ -1232,6 +1232,8 @@ def ws_update_subtotal_formula(ws, formula_row: int, last_data_row: int):
 def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
     """
     Agrega subtotales al final de todos los registros para EXISTENCIA y TOTAL INV.
+    También agrega subtotales en G1 e I1.
+    Usa funciones SUBTOTAL compatibles con filtros dinámicos.
     """
     try:
         log(f"Agregando subtotales finales en fila {last_data_row + 1}...")
@@ -1245,7 +1247,6 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
                 exist_col = col
                 break
         
-
         total_inv_col = hdrn.get(_norm("TOTAL INV"))      
         header_color = None
         try:
@@ -1255,24 +1256,17 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
         
         subtotals_added = 0
 
+        # Subtotal EXISTENCIA - Usar función 109 para SUMA (ignora filas ocultas)
         if exist_col:
             try:
                 col_letter = _col_num_to_letter(exist_col)
-                formula = f"=SUBTOTAL(9,{col_letter}{header_row + 1}:{col_letter}{last_data_row})"
+                # 109 = SUMA ignorando filas ocultas por filtros
+                formula = f"=SUBTOTAL(109,{col_letter}{header_row + 1}:{col_letter}{last_data_row})"
                 
                 cell = ws.Cells(subtotal_row, exist_col)               
                 cell.Formula = formula
                 
-                try:
-                    cell.Calculate()
-                    valor = cell.Value
-                    
-                    if valor is not None:
-                        cell.Value = valor
-
-                except Exception as e:
-                    log(f"    ⚠ No se pudo calcular valor: {e}")
-                
+                # Formato sin decimales y con punto como separador de miles
                 cell.NumberFormat = "#.##0"
                 cell.Font.Bold = True
                 cell.Interior.Color = header_color
@@ -1285,10 +1279,30 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
                 except Exception:
                     pass
                 
-                formato_final = cell.NumberFormat
-                valor_mostrado = cell.Text
-
-                subtotals_added += 1                            
+                subtotals_added += 1
+                log(f"    ✓ Subtotal EXISTENCIA agregado en fila {subtotal_row} (formato: #.##0)")
+                
+                # ✨ Agregar subtotal en G1 SIN FONDO AZUL, solo negrilla
+                try:
+                    cell_g1 = ws.Cells(1, exist_col)
+                    cell_g1.Formula = formula
+                    cell_g1.NumberFormat = "#.##0"
+                    cell_g1.Font.Bold = True
+                    # NO aplicar color de fondo - quitar esta línea:
+                    # cell_g1.Interior.Color = header_color
+                    cell_g1.Interior.ColorIndex = -4142  # Sin color de fondo (transparente)
+                    
+                    try:
+                        for border_id in [7, 8, 9, 10]:
+                            cell_g1.Borders(border_id).LineStyle = 1
+                            cell_g1.Borders(border_id).Weight = 2
+                            cell_g1.Borders(border_id).ColorIndex = -4105
+                    except Exception:
+                        pass
+                    
+                    log(f"    ✓ Subtotal EXISTENCIA también agregado en G1 (sin fondo, solo negrilla)")
+                except Exception as e:
+                    log(f"    ⚠ Error al agregar subtotal en G1: {e}")
                 
             except Exception as e:
                 log(f"    ⚠ Error al agregar subtotal EXISTENCIA: {e}")
@@ -1299,6 +1313,7 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
         if total_inv_col:
             try:
                 col_letter = _col_num_to_letter(total_inv_col)
+                # 109 = SUMA ignorando filas ocultas por filtros
                 formula = f"=SUBTOTAL(109,{col_letter}{header_row + 1}:{col_letter}{last_data_row})"
                 
                 cell = ws.Cells(subtotal_row, total_inv_col)               
@@ -1307,10 +1322,13 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
                 cell.Interior.Color = header_color
 
                 try:
+                    # Copiar el formato de la última fila de datos
                     original_format = ws.Cells(last_data_row, total_inv_col).NumberFormat
                     cell.NumberFormat = original_format
                 except Exception as e:
                     log(f"    ⚠ No se pudo copiar formato original: {e}")
+                    # Formato por defecto si falla (contabilidad con 2 decimales)
+                    cell.NumberFormat = "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)"
 
                 try:
                     for border_id in [7, 8, 9, 10]:
@@ -1321,17 +1339,48 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
                     pass
                 
                 subtotals_added += 1
+                log(f"    ✓ Subtotal TOTAL INV agregado en fila {subtotal_row}")
+                
+                # ✨ Agregar subtotal en I1 con fondo AMARILLO
+                try:
+                    cell_i1 = ws.Cells(1, total_inv_col)
+                    cell_i1.Formula = formula
+                    cell_i1.Font.Bold = True
+                    
+                    # 🎨 Color amarillo (65535 en RGB o 6 en ColorIndex)
+                    cell_i1.Interior.Color = 65535  # Amarillo RGB
+                    
+                    try:
+                        original_format = ws.Cells(last_data_row, total_inv_col).NumberFormat
+                        cell_i1.NumberFormat = original_format
+                    except Exception:
+                        cell_i1.NumberFormat = "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)"
+                    
+                    try:
+                        for border_id in [7, 8, 9, 10]:
+                            cell_i1.Borders(border_id).LineStyle = 1
+                            cell_i1.Borders(border_id).Weight = 2
+                            cell_i1.Borders(border_id).ColorIndex = -4105
+                    except Exception:
+                        pass
+                    
+                    log(f"    ✓ Subtotal TOTAL INV también agregado en I1 (fondo amarillo)")
+                except Exception as e:
+                    log(f"    ⚠ Error al agregar subtotal en I1: {e}")
                 
             except Exception as e:
                 log(f"    ⚠ Error al agregar subtotal TOTAL INV: {e}")
         
         if subtotals_added > 0:
-            log(f"{subtotals_added} subtotales agregados exitosamente con formato")
+            log(f"✅ {subtotals_added} subtotales agregados con fórmulas dinámicas (compatibles con filtros)")
+            log(f"✅ G1: sin fondo (solo negrilla) | I1: fondo amarillo")
         else:
             log(f"  ⚠ No se pudieron agregar subtotales")
         
     except Exception as e:
         log(f"  ⚠ Error al agregar subtotales finales: {e}")
+        import traceback
+        log(traceback.format_exc())
 
 def _col_num_to_letter(col_num):
     """Convierte número de columna a letra."""
