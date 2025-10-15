@@ -21,13 +21,14 @@ OUTPUT_BASENAME = "$2025 INVENTARIO GENERAL ACTUALIZADO"
 APPLY_PASSWORD_TO_OUTPUT = True
 
 # Prefijos para ubicar archivos descargados del ERP
-PFX_INV_ACTUALIZADO = "INVENTARIO GENERAL ACTUALIZADO"
-PFX_VAL_GENERAL     = "VALORIZADO GENERAL"
-PFX_VAL_FALT_IMPO   = "VALORIZADO FALTANTES IMPO"
-PFX_VAL_FALT        = "VALORIZADO FALTANTES"
-PFX_VAL_TOBERIN     = "VALORIZADO TOBERIN"
-PFX_MARCAS          = "MARCAS"
-PFX_DISTRIBUCION    = "DISTRIBUCION DE MATRICES"
+PFX_INV_ACTUALIZADO  = "INVENTARIO GENERAL ACTUALIZADO"
+PFX_VAL_GENERAL      = "VALORIZADO GENERAL"
+PFX_VAL_FALT_IMPO    = "VALORIZADO FALTANTES IMPO"
+PFX_VAL_FALT         = "VALORIZADO FALTANTES"
+PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
+PFX_MARCAS           = "MARCAS"
+PFX_DISTRIBUCION     = "DISTRIBUCION DE MATRICES"
+PFX_MAYOR_EXISTENCIA = "2025 INVENTARIO MYR EXISTENCIA"
 
 # Matriz USD
 PFX_MATRIZ_USD = "$2025 MATRIZ USD"
@@ -42,6 +43,7 @@ HEADER_ROW_INV         = 2
 HEADER_ROW_INV_LISTA   = 1
 HEADER_ROW_VAL         = 9
 HEADER_ROW_MATRIZ      = 1
+HEADER_ROW_MAYOR_EXIST = 1  
 
 # Columnas a limpiar en INVENTARIO COPIA
 COLS_A_LIMPIAR = [
@@ -636,7 +638,154 @@ def cargar_distribucion(base_dir: Path) -> dict:
         import traceback
         log(traceback.format_exc())
         return {'gestor': {}, 'clasificacion': {}}
-
+    
+def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
+    """
+    Carga el archivo MAYOR EXISTENCIA, hoja COSTOS INV FINAL.
+    Retorna REFERENCIA FERTRAC y REM EN CONSIG
+    """
+    try:
+        p = find_by_prefix(base_dir, PFX_MAYOR_EXISTENCIA)
+        log(f"Abriendo Mayor Existencia: {p.name}")
+        
+        src = open_as_excel_source(p, PASSWORDS_TRY)
+        
+        # Buscar hoja COSTOS INV FINAL
+        xf = pd.ExcelFile(src, engine="openpyxl")
+        sheet_found = None
+        
+        for sn in xf.sheet_names:
+            sn_norm = _norm(sn)
+            if "costos" in sn_norm and "inv" in sn_norm and "final" in sn_norm:
+                sheet_found = sn
+                log(f"  ✓ Hoja encontrada: '{sn}'")
+                break
+        
+        if not sheet_found:
+            # Buscar alternativas
+            for sn in xf.sheet_names:
+                sn_norm = _norm(sn)
+                if "costo" in sn_norm or "final" in sn_norm:
+                    sheet_found = sn
+                    log(f"  ✓ Hoja encontrada (alternativa): '{sn}'")
+                    break
+        
+        if not sheet_found:
+            sheet_found = xf.sheet_names[0]
+            log(f"  ⚠ Usando primera hoja: '{sheet_found}'")
+        
+        # Leer archivo buscando el encabezado
+        df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
+        
+        # Buscar fila de encabezado
+        header_row_idx = None
+        for idx in range(min(20, len(df_raw))):
+            row_str = ' '.join([str(v).upper() for v in df_raw.iloc[idx] if pd.notna(v)])
+            if ("REFERENCIA" in row_str or "REF" in row_str) and ("CONSIG" in row_str or "REM" in row_str):
+                header_row_idx = idx
+                log(f"  ✓ Encabezado encontrado en fila {idx + 1}")
+                break
+        
+        if header_row_idx is None:
+            # Usar header_row configurado
+            header_row_idx = HEADER_ROW_MAYOR_EXIST - 1
+            log(f"  ⚠ Usando fila de encabezado configurada: {HEADER_ROW_MAYOR_EXIST}")
+        
+        # Leer con el encabezado correcto
+        df = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=header_row_idx)
+        
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        idx = {_norm(c): c for c in df.columns}
+        
+        # 🔍 BUSCAR: REFERENCIA FERTRAC
+        ref_col = None
+        for col_name in df.columns:
+            col_norm = _norm(col_name)
+            if "referencia" in col_norm and "fertrac" in col_norm:
+                ref_col = col_name
+                log(f"  ✓ Columna REFERENCIA FERTRAC encontrada: '{col_name}'")
+                break
+        
+        if not ref_col:
+            # Buscar solo "REFERENCIA"
+            for col_name in df.columns:
+                col_norm = _norm(col_name)
+                if col_norm == "referencia" or col_norm.startswith("referencia "):
+                    ref_col = col_name
+                    log(f"  ✓ Columna REFERENCIA encontrada: '{col_name}'")
+                    break
+        
+        if not ref_col:
+            # Buscar simplemente "REF" o columnas que contengan "referenc"
+            for col_name in df.columns[:10]:
+                col_norm = _norm(col_name)
+                if "ref" in col_norm or "codigo" in col_norm:
+                    ref_col = col_name
+                    log(f"  ✓ Columna REFERENCIA encontrada (alternativa): '{col_name}'")
+                    break
+        
+        # 🔍 BUSCAR: REM EN CONSIG (columna AI)
+        rem_consig_col = None
+        
+        # Buscar exactamente "REM EN CONSIG"
+        for col_name in df.columns:
+            col_norm = _norm(col_name)
+            if col_norm == "rem en consig":
+                rem_consig_col = col_name
+                log(f"  ✓ Columna REM EN CONSIG encontrada: '{col_name}'")
+                break
+        
+        if not rem_consig_col:
+            # Buscar variantes
+            for col_name in df.columns:
+                col_norm = _norm(col_name)
+                if "rem" in col_norm and "consig" in col_norm:
+                    rem_consig_col = col_name
+                    log(f"  ✓ Columna REM EN CONSIG encontrada (variante): '{col_name}'")
+                    break
+        
+        if not rem_consig_col:
+            # Buscar por posición (columna AI = índice 34 en Excel, pero en pandas puede variar)
+            # Buscar columnas que contengan "rem" o "consig"
+            for col_name in df.columns:
+                col_norm = _norm(col_name)
+                if "consignacion" in col_norm or "consig" in col_norm:
+                    rem_consig_col = col_name
+                    log(f"  ⚠ Usando columna que contiene 'consig': '{col_name}'")
+                    break
+        
+        if not ref_col:
+            raise KeyError(f"No encontré columna REFERENCIA en {p.name}. Columnas: {list(df.columns)}")
+        if not rem_consig_col:
+            raise KeyError(f"No encontré columna REM EN CONSIG en {p.name}. Columnas: {list(df.columns)}")
+        
+        # Filtrar filas válidas
+        df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
+        
+        # Construir DataFrame de salida
+        out = pd.DataFrame()
+        out["__REF_MAYOR__"] = df[ref_col].apply(to_num_str)
+        out["__REM_CONSIG__"] = pd.to_numeric(df[rem_consig_col], errors="coerce").fillna(0)
+        
+        # Eliminar duplicados
+        out = out.drop_duplicates(subset=["__REF_MAYOR__"], keep="first")
+        
+        # Estadísticas
+        valores_no_cero = (out["__REM_CONSIG__"] != 0).sum()
+        log(f"  ✓ Mayor Existencia cargada: {len(out)} referencias")
+        log(f"  ✓ REM EN CONSIG: {valores_no_cero} valores diferentes de cero")
+        
+        return out
+        
+    except FileNotFoundError:
+        log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MAYOR_EXISTENCIA}'.")
+        return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
+    except Exception as e:
+        log(f"⚠ ERROR al cargar Mayor Existencia: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
 
 def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: int, 
                                    ref_col_idx: int, hdrn_copia: dict, 
@@ -1742,6 +1891,13 @@ def main():
     distribucion = cargar_distribucion(BASE_PATH)
     log(f"Distribución: {len(distribucion['gestor'])} gestores, {len(distribucion['clasificacion'])} clasificaciones")
 
+    # Cargar Mayor Existencia
+    df_mayor_exist = cargar_mayor_existencia(BASE_PATH)
+    mayor_exist_map = df_mayor_exist.set_index("__REF_MAYOR__")["__REM_CONSIG__"].to_dict() if len(df_mayor_exist) > 0 else {}
+    if len(mayor_exist_map) > 0:
+        no_cero = sum(1 for v in mayor_exist_map.values() if v != 0)
+        log(f"Mayor Existencia: {no_cero} referencias con REM EN CONSIG diferente de cero")
+
     # Join de cantidades
     val_map_impo = df_val_impo.set_index("__REF_INT__")["__CANT__"]
     val_map_falt = df_val_falt.set_index("__REF_INT__")["__CANT__"]
@@ -2640,6 +2796,124 @@ def main():
         log(traceback.format_exc())
     
     log("=" * 60)
+
+    # 17) Llenar UND REM CONSIGNACION en INV LISTA PRECIOS desde Mayor Existencia
+    log("=" * 60)
+    log("PASO 17: Llenando UND REM CONSIGNACION en INV LISTA PRECIOS...")
+    try:
+        # Verificar que tenemos datos de Mayor Existencia
+        if len(mayor_exist_map) == 0:
+            log("  ⚠ No hay datos de Mayor Existencia disponibles - saltando")
+        else:
+            # Buscar la hoja INV LISTA PRECIOS
+            ws_lp = None
+            target_norm = _norm(SHEET_INV_LISTA)
+            
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name = wb.Worksheets(i).Name
+                if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                    ws_lp = wb.Worksheets(i)
+                    log(f"  ✓ Hoja encontrada: '{sheet_name}'")
+                    break
+            
+            if ws_lp is None:
+                for i in range(1, wb.Worksheets.Count + 1):
+                    sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                    if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                        ws_lp = wb.Worksheets(i)
+                        log(f"  ✓ Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                        break
+            
+            if ws_lp:
+                # Obtener encabezados de INV LISTA PRECIOS
+                hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
+                
+                # Buscar columnas necesarias
+                ref_fertrac_idx_lp = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
+                
+                # 🔍 Buscar columna UND REM CONSIGNACION (exacta y variantes)
+                rem_consig_idx = (
+                    hdrn_lp.get(_norm("UND REM CONSIGNACION")) or
+                    hdrn_lp.get(_norm("UND REM CONSIG")) or
+                    hdrn_lp.get(_norm("REM CONSIGNACION")) or
+                    hdrn_lp.get(_norm("REM EN CONSIGNACION"))
+                )
+                
+                if not ref_fertrac_idx_lp:
+                    log("  ⚠ Columna REFERENCIA FERTRAC no encontrada en INV LISTA PRECIOS")
+                elif not rem_consig_idx:
+                    log("  ⚠ Columna UND REM CONSIGNACION no encontrada en INV LISTA PRECIOS")
+                    log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
+                    # Mostrar columnas que contengan "consig" o "rem"
+                    posibles = [k for k in hdr_lp.keys() if 'consig' in _norm(k) or 'rem' in _norm(k)]
+                    if posibles:
+                        log(f"     Columnas posibles con 'consig' o 'rem': {posibles}")
+                else:
+                    # Obtener el nombre real de la columna para el log
+                    col_name_real = [k for k, v in hdr_lp.items() if v == rem_consig_idx][0]
+                    
+                    log(f"  ✓ Columnas encontradas:")
+                    log(f"     - REFERENCIA FERTRAC: índice {ref_fertrac_idx_lp}")
+                    log(f"     - UND REM CONSIGNACION: '{col_name_real}' (índice {rem_consig_idx})")
+                    
+                    # Determinar última fila con datos en INV LISTA PRECIOS
+                    last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx_lp, hr_lp)
+                    pivot_top_lp = ws_first_pivot_row(ws_lp)
+                    if pivot_top_lp and pivot_top_lp > hr_lp:
+                        last_row_lp = min(last_row_lp, pivot_top_lp - 1)
+                    
+                    log(f"  📊 Procesando {last_row_lp - hr_lp} filas...")
+                    
+                    # Leer REFERENCIA FERTRAC de INV LISTA PRECIOS
+                    refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx_lp)
+                    refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
+                    
+                    # Cruzar con Mayor Existencia (REM EN CONSIG) para llenar UND REM CONSIGNACION
+                    valores_rem_consig = []
+                    matched = 0
+                    valores_no_cero = 0
+                    
+                    for ref_fertrac in refs_fertrac_lp_norm:
+                        if ref_fertrac and ref_fertrac in mayor_exist_map:
+                            val = mayor_exist_map[ref_fertrac]
+                            
+                            # Convertir a número
+                            try:
+                                val_num = float(val) if val is not None else ""  # ✅ Vacío en lugar de 0
+                                
+                                # Si el valor es 0 desde la fuente, sí lo ponemos
+                                if val_num == 0 or val_num == "":
+                                    valores_rem_consig.append("" if val is None or val == "" else 0)
+                                else:
+                                    valores_rem_consig.append(val_num)
+                                    matched += 1
+                                    valores_no_cero += 1
+                            except:
+                                valores_rem_consig.append("")  # ✅ Vacío en lugar de 0
+                        else:
+                            # No hay coincidencia - dejar en blanco
+                            valores_rem_consig.append("")  # ✅ Vacío en lugar de 0
+
+                    # Escribir en UND REM CONSIGNACION de INV LISTA PRECIOS
+                    write_range_as_array(ws_lp, hr_lp + 1, rem_consig_idx, valores_rem_consig)
+                    
+                    log(f"  ✅ UND REM CONSIGNACION actualizada en INV LISTA PRECIOS:")
+                    log(f"     - Total procesado: {len(valores_rem_consig)}")
+                    log(f"     - Coincidencias encontradas: {matched}")
+                    log(f"     - Valores diferentes de cero: {valores_no_cero}")
+                    log(f"     - Sin coincidencia (valor 0): {len(valores_rem_consig) - matched}")
+                    
+            else:
+                log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
+                
+    except Exception as e:
+        log(f"  ❌ ERROR al llenar UND REM CONSIGNACION: {e}")
+        import traceback
+        log(traceback.format_exc())
+    
+    log("=" * 60)
+
+
 
     # 17) GUARDADO COMO ARCHIVO NUEVO (SIN ORDENAR TODAVÍA)
     log("Preparando guardado del archivo...")
