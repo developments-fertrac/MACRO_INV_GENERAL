@@ -29,7 +29,7 @@ PFX_VAL_TOBERIN     = "VALORIZADO TOBERIN"
 PFX_MARCAS          = "MARCAS"
 PFX_DISTRIBUCION    = "DISTRIBUCION DE MATRICES"
 
-# Nuevo: Matriz USD
+# Matriz USD
 PFX_MATRIZ_USD = "$2025 MATRIZ USD"
 SHEET_MATRIZ_2025 = "2025"
 
@@ -379,7 +379,6 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
                 break
         if not sheet_found:
             sheet_found = xf.sheet_names[0]
-        log(f"  Usando hoja: {sheet_found}")
         
         df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
         
@@ -391,7 +390,6 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
             
             if has_ref or has_desc:
                 header_row_idx = idx
-                log(f"  Encabezados encontrados en fila {idx + 1}")
                 break
         
         if header_row_idx is None:
@@ -406,10 +404,8 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
         df = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=header_row_idx)
         
         df.columns = [str(c).strip() if not str(c).startswith("Unnamed") and str(c) != "nan" else f"_COL_{i}" 
-                      for i, c in enumerate(df.columns)]
-        
-        log(f"  Columnas encontradas: {list(df.columns)[:10]}...")
-        
+                      for i, c in enumerate(df.columns)]        
+      
         idx = {_norm(c): c for c in df.columns}
         
         ref_col = None
@@ -454,9 +450,7 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
         if not desc_col:
             raise KeyError(f"No encontré columna 'DESCRIPCION LISTA PRECIOS' en {p.name}. Columnas: {list(df.columns)}")
         
-        log(f"  ✓ Columna referencia: {ref_col}")
-        log(f"  ✓ Columna descripción: {desc_col}")
-        
+       
         df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
         
         out = pd.DataFrame()
@@ -465,7 +459,6 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
         
         out = out.drop_duplicates(subset=["__REF_MATRIZ__"], keep="first")
         
-        log(f"  ✓ Matriz USD cargada: {len(out)} referencias")
         return out
         
     except FileNotFoundError:
@@ -481,32 +474,23 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
 def cargar_marcas(base_dir: Path) -> set:
     """
     Carga el archivo MARCAS y retorna un set con las marcas propias.
-    El archivo tiene las marcas en la columna B (sin encabezado).
     """
     try:
         p = find_by_prefix(base_dir, PFX_MARCAS)
         log(f"Abriendo archivo MARCAS: {p.name}")
         
-        src = open_as_excel_source(p, PASSWORDS_TRY)
-        
-        # Leer sin encabezado ya que el archivo empieza directamente con datos
-        df = pd.read_excel(src, sheet_name=0, engine="openpyxl", header=None)
-        
-        # Las marcas están en la columna B (índice 1)
+        src = open_as_excel_source(p, PASSWORDS_TRY)        
+        df = pd.read_excel(src, sheet_name=0, engine="openpyxl", header=None)      
         marcas_propias = set()
         
-        # Buscar la columna que contiene las marcas (puede ser A o B)
         for col_idx in range(min(3, len(df.columns))):
             for val in df[col_idx].dropna():
                 val_str = str(val).strip().upper()
-                # Verificar que sea una marca válida (no vacío, no números puros)
                 if val_str and val_str not in ("", "NONE", "NAN", "MARCA", "MARCAS"):
-                    # Verificar que tenga letras
                     if any(c.isalpha() for c in val_str):
                         marcas_propias.add(val_str)
         
-        log(f"  ✓ {len(marcas_propias)} marcas propias cargadas")
-        log(f"  Ejemplos: {list(marcas_propias)[:5]}")
+        log(f"{len(marcas_propias)} marcas propias cargadas")
         return marcas_propias
         
     except FileNotFoundError:
@@ -521,26 +505,14 @@ def cargar_marcas(base_dir: Path) -> set:
 
 def cargar_distribucion(base_dir: Path) -> dict:
     """
-    Carga el archivo DISTRIBUCIÓN DE MATRICES OCTUBRE.
-    Estructura esperada:
-    - Columna B (LINEA): nombre de la línea/marca
-    - Columna D (GESTOR): nombre del gestor
-    - Columna C (CATEGORIA): clasificación
-    
-    Retorna un diccionario con:
-    - 'gestor': dict {marca_normalizada: gestor/lider}
-    - 'clasificacion': dict {marca_normalizada: clasificacion}
+    Carga el archivo DISTRIBUCIÓN DE MATRICES.
     """
     try:
         p = find_by_prefix(base_dir, PFX_DISTRIBUCION)
         log(f"Abriendo archivo DISTRIBUCIÓN: {p.name}")
         
         src = open_as_excel_source(p, PASSWORDS_TRY)
-        
-        # Leer todas las hojas disponibles
         xf = pd.ExcelFile(src, engine="openpyxl")
-        
-        # Buscar la hoja correcta (puede llamarse "DISTRIBUCION MATRICES" o similar)
         sheet_name = None
         for sn in xf.sheet_names:
             if "DISTRIBUCION" in _norm(sn) or "MATRICES" in _norm(sn):
@@ -550,48 +522,30 @@ def cargar_distribucion(base_dir: Path) -> dict:
         if not sheet_name:
             sheet_name = xf.sheet_names[0]
         
-        log(f"  Usando hoja: {sheet_name}")
-        
-        # Leer con encabezados detectados automáticamente
-        # Buscar la fila de encabezados (puede no estar en la primera fila)
         df_raw = pd.read_excel(src, sheet_name=sheet_name, engine="openpyxl", header=None)
-        
-        # Buscar la fila que contiene "LINEA", "GESTOR", etc.
         header_row = None
         for idx in range(min(10, len(df_raw))):
             row_str = ' '.join([str(v).upper() for v in df_raw.iloc[idx] if pd.notna(v)])
             if "LINEA" in row_str and "GESTOR" in row_str:
                 header_row = idx
-                log(f"  Encabezados encontrados en fila {idx + 1}")
                 break
         
         if header_row is None:
-            header_row = 2  # Por defecto, basado en la imagen (fila 3)
-        
-        # Leer con el encabezado correcto
+            header_row = 2         
         df = pd.read_excel(src, sheet_name=sheet_name, engine="openpyxl", header=header_row)
-        
-        # Limpiar nombres de columnas
         df.columns = [str(c).strip() for c in df.columns]
         
-        log(f"  Columnas detectadas: {list(df.columns)}")
-        
-        # Buscar columnas específicas
         idx = {_norm(c): c for c in df.columns}
-        
-        # Columna LINEA (columna B en la imagen)
         linea_col = (
             idx.get("linea") or idx.get("línea") or idx.get("marca")
             or next((real for kn, real in idx.items() if "linea" in kn or "línea" in kn), None)
         )
-        
-        # Columna GESTOR (columna D en la imagen)
+
         gestor_col = (
             idx.get("gestor") or idx.get("lider") or idx.get("líder") 
             or next((real for kn, real in idx.items() if "gestor" in kn or "lider" in kn), None)
         )
         
-        # Columna CATEGORIA/CLASIFICACION (columna C en la imagen)
         clasif_col = (
             idx.get("categoria") or idx.get("categoría") or idx.get("clasificacion") 
             or idx.get("clasificación") or idx.get("tipo")
@@ -602,49 +556,33 @@ def cargar_distribucion(base_dir: Path) -> dict:
             log(f"  ⚠ No se encontró columna de LINEA/MARCA")
             return {'gestor': {}, 'clasificacion': {}}
         
-        log(f"  Columnas mapeadas:")
-        log(f"    - LINEA: {linea_col}")
-        log(f"    - GESTOR: {gestor_col if gestor_col else 'NO ENCONTRADA'}")
-        log(f"    - CATEGORIA: {clasif_col if clasif_col else 'NO ENCONTRADA'}")
-        
-        # Crear diccionarios de mapeo
         gestor_map = {}
         clasif_map = {}
-        
-        # Procesar cada fila
+
         for idx_row, row in df.iterrows():
-            # Obtener valor de LINEA
             linea_val = row[linea_col] if linea_col in row.index else None
             if pd.isna(linea_val) or str(linea_val).strip() == "":
                 continue
             
             linea_str = str(linea_val).strip().upper()
             
-            # Limpiar etiquetas como "(EN DESARROLLO)"
             linea_key = re.sub(r'\s*\([^)]*\)\s*', '', linea_str).strip()
             
             if not linea_key:
                 continue
-            
-            # Mapear gestor
+        
             if gestor_col and gestor_col in row.index:
                 gestor_val = row[gestor_col]
                 if not pd.isna(gestor_val) and str(gestor_val).strip():
                     gestor_map[linea_key] = str(gestor_val).strip()
             
-            # Mapear clasificación/categoría
             if clasif_col and clasif_col in row.index:
                 clasif_val = row[clasif_col]
                 if not pd.isna(clasif_val) and str(clasif_val).strip():
                     clasif_map[linea_key] = str(clasif_val).strip()
         
-        log(f"  ✓ {len(gestor_map)} gestores cargados")
-        log(f"  ✓ {len(clasif_map)} clasificaciones cargadas")
-        
-        if gestor_map:
-            log(f"  Ejemplos de gestores: {list(gestor_map.items())[:3]}")
-        if clasif_map:
-            log(f"  Ejemplos de clasificaciones: {list(clasif_map.items())[:3]}")
+        log(f"{len(gestor_map)} gestores cargados")
+        log(f"{len(clasif_map)} clasificaciones cargadas")
         
         return {
             'gestor': gestor_map,
@@ -670,7 +608,6 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
     try:
         log("Aplicando reglas para marcas propias...")
         
-        # Obtener índices de columnas
         col_linea_copia = hdrn_copia.get(_norm("LINEA COPIA"))
         col_marca_sistema = hdrn_copia.get(_norm("MARCA SISTEMA")) or hdrn_copia.get(_norm("Marca sistema"))
         col_marca_copia = hdrn_copia.get(_norm("MARCA COPIA")) or hdrn_copia.get(_norm("MARCA copia"))
@@ -685,14 +622,7 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
             log(f"    MARCA SISTEMA: {'✓' if col_marca_sistema else '✗'}")
             return
         
-        log(f"  Columnas detectadas:")
-        log(f"    - REFERENCIA: columna {ref_col_idx}")
-        log(f"    - LINEA COPIA: columna {col_linea_copia}")
-        log(f"    - MARCA SISTEMA: columna {col_marca_sistema}")
-        log(f"    - MARCA COPIA: columna {col_marca_copia if col_marca_copia else 'NO ENCONTRADA'}")
-        log(f"    - INV BODEGA GERENCIA: columna {col_inv_bodega_ger if col_inv_bodega_ger else 'NO ENCONTRADA'}")
         
-        # Leer datos necesarios de forma optimizada
         cols_to_read = [ref_col_idx, col_linea_copia, col_marca_sistema]
         data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
         
@@ -700,11 +630,9 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
         lineas_copia = data[col_linea_copia]
         marcas_sistema = data[col_marca_sistema]
         
-        # Identificar filas que cumplen los filtros
         filas_a_procesar = []
         filas_a_eliminar = []
        
-        # AGREGAR ESTOS CONTADORES:
         filtro1_rechazados = 0
         filtro2_rechazados = 0
 
@@ -715,38 +643,26 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
             linea = str(lineas_copia[i]).strip() if lineas_copia[i] not in (None, "", "None") else ""
             marca = str(marcas_sistema[i]).strip() if marcas_sistema[i] not in (None, "", "None") else ""
             
-            # Verificar si es una referencia a eliminar (tipo 0041R: 4 dígitos + 1 letra)
             if ref and re.match(r'^\d{4}[A-Za-z]$', ref):
                 filas_a_eliminar.append((i, ref))
                 continue
             
-            # Convertir a mayúsculas para comparaciones
             linea_upper = linea.upper()
             marca_upper = marca.upper()
             
-            # Filtro 1: LINEA COPIA debe ser indeterminado, vacío o #N/D
             if linea or linea_upper in ("INDETERMINADO", "#N/D", "#N/A", "N/A", "NA", "NONE"):
                 continue
             
-            # Filtro 2: MARCA SISTEMA debe estar en marcas propias
             if marca_upper not in marcas_propias:
                 continue
             
-            # Esta fila cumple los filtros
             filas_a_procesar.append((i, ref, marca))
         
-        log(f"  📊 Estadísticas de filtrado:")
-        log(f"     - Total analizado: {len(referencias)}")
-        log(f"     - Referencias tipo '0041R': {len(filas_a_eliminar)}")
-        log(f"     - Rechazados por FILTRO 1 (con LINEA COPIA): {filtro1_rechazados}")
-        log(f"     - Rechazados por FILTRO 2 (MARCA no propia): {filtro2_rechazados}")
-        log(f"     - TOTAL que cumplen ambos filtros: {len(filas_a_procesar)}")
-        log(f"     - Verificación: {len(referencias)} = {len(filas_a_eliminar)} + {filtro1_rechazados} + {filtro2_rechazados} + {len(filas_a_procesar)}")
 
         # Eliminar filas tipo "0041R" (en orden inverso para no afectar índices)
         if filas_a_eliminar:
             log(f"  Eliminando referencias tipo '####L':")
-            for idx, ref in filas_a_eliminar[:5]:  # Mostrar solo primeros 5
+            for idx, ref in filas_a_eliminar[:5]:  
                 log(f"    - {ref}")
             if len(filas_a_eliminar) > 5:
                 log(f"    ... y {len(filas_a_eliminar) - 5} más")
@@ -758,24 +674,21 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 except Exception as e:
                     log(f"    ⚠ Error al eliminar fila {fila_excel} ({ref}): {e}")
             
-            log(f"  ✓ {len(filas_a_eliminar)} filas eliminadas")
+            log(f"{len(filas_a_eliminar)} filas eliminadas")
             
             # Recalcular last_row después de eliminar
             last_row = last_row - len(filas_a_eliminar)
             log(f"  Nuevo rango de datos: hasta fila {last_row}")
         
-        # Procesar filas que cumplen los filtros
         if not filas_a_procesar:
             log("  ℹ No hay registros para procesar después de aplicar filtros")
             return
         
-        log(f"  Procesando {len(filas_a_procesar)} registros (modo optimizado por lotes)...")
+        log(f"  Procesando {len(filas_a_procesar)} registros ...")
         
-        # ⚠️ OPTIMIZACIÓN CRÍTICA: Actualizar por LOTES
         gestor_map = distribucion.get('gestor', {})
         clasif_map = distribucion.get('clasificacion', {})
         
-        # Crear diccionario de fila_excel → valores a escribir
         updates = {}
         for idx, ref, marca in filas_a_procesar:
             fila_excel = start_data_row + idx
@@ -790,7 +703,6 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 'clasificacion': clasif_map.get(marca_upper, "")
             }
         
-        # Agrupar filas contiguas para optimizar escritura
         filas_ordenadas = sorted(updates.keys())
         
         def agrupar_contiguos(filas):
@@ -810,13 +722,11 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
             return grupos
         
         grupos_contiguos = agrupar_contiguos(filas_ordenadas)
-        log(f"    Agrupados en {len(grupos_contiguos)} bloques contiguos")
         
         columnas_actualizadas = 0
         lideres_encontrados = sum(1 for v in updates.values() if v['lider'])
         clasif_encontradas = sum(1 for v in updates.values() if v['clasificacion'])
         
-        # Actualizar MARCA COPIA
         if col_marca_copia:
             for inicio, fin in grupos_contiguos:
                 valores = [updates[f]['marca'] for f in range(inicio, fin + 1)]
@@ -826,9 +736,7 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 )
                 rng.Value = [[v] for v in valores]
             columnas_actualizadas += 1
-            log(f"    ✓ MARCA COPIA actualizada")
         
-        # Actualizar INV BODEGA GERENCIA
         if col_inv_bodega_ger:
             for inicio, fin in grupos_contiguos:
                 valores = [updates[f]['inv_bodega'] for f in range(inicio, fin + 1)]
@@ -838,9 +746,7 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 )
                 rng.Value = [[v] for v in valores]
             columnas_actualizadas += 1
-            log(f"    ✓ INV BODEGA GERENCIA actualizada")
         
-        # Actualizar LINEA COPIA
         if col_linea_copia:
             for inicio, fin in grupos_contiguos:
                 valores = [updates[f]['linea'] for f in range(inicio, fin + 1)]
@@ -850,9 +756,7 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 )
                 rng.Value = [[v] for v in valores]
             columnas_actualizadas += 1
-            log(f"    ✓ LINEA COPIA actualizada")
         
-        # Actualizar SUB-LINEA COPIA
         if col_sublinea_copia:
             for inicio, fin in grupos_contiguos:
                 valores = [updates[f]['sublinea'] for f in range(inicio, fin + 1)]
@@ -862,9 +766,7 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 )
                 rng.Value = [[v] for v in valores]
             columnas_actualizadas += 1
-            log(f"    ✓ SUB-LINEA COPIA actualizada")
         
-        # Actualizar LIDER LINEA
         if col_lider_linea:
             for inicio, fin in grupos_contiguos:
                 valores = [updates[f]['lider'] for f in range(inicio, fin + 1)]
@@ -874,9 +776,7 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 )
                 rng.Value = [[v] for v in valores]
             columnas_actualizadas += 1
-            log(f"    ✓ LIDER LINEA actualizada ({lideres_encontrados} líderes asignados)")
         
-        # Actualizar CLASIFICACION
         if col_clasificacion:
             for inicio, fin in grupos_contiguos:
                 valores = [updates[f]['clasificacion'] for f in range(inicio, fin + 1)]
@@ -886,14 +786,8 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
                 )
                 rng.Value = [[v] for v in valores]
             columnas_actualizadas += 1
-            log(f"    ✓ CLASIFICACION actualizada ({clasif_encontradas} clasificaciones asignadas)")
         
-        log(f"  ✅ Proceso completado:")
-        log(f"     - {len(updates)} registros procesados")
-        log(f"     - {columnas_actualizadas} columnas actualizadas")
-        log(f"     - {lideres_encontrados} líderes asignados")
-        log(f"     - {clasif_encontradas} clasificaciones asignadas")
-        
+        log(f" Proceso completado:")
     except Exception as e:
         log(f"  ⚠ ERROR al aplicar reglas de marcas propias: {e}")
         import traceback
@@ -946,7 +840,7 @@ def excel_open(path: Path, password: str | None = None):
     try:
         wb = excel.Workbooks.Open(str(src_path), UpdateLinks=0, ReadOnly=False, IgnoreReadOnlyRecommended=True)
         try:
-            excel.Calculation = -4135  # xlCalculationManual
+            excel.Calculation = -4135  
         except Exception as e:
             log(f"Aviso: no se pudo establecer cálculo manual: {e}")
         return excel, wb, info
@@ -957,7 +851,7 @@ def excel_open(path: Path, password: str | None = None):
 def excel_close(excel, wb, save=True):
     try:
         if save:
-            excel.Calculation = -4105  # xlCalculationAutomatic antes de guardar
+            excel.Calculation = -4105  
         wb.Close(SaveChanges=save)
     finally:
         excel.Quit()
@@ -1017,11 +911,9 @@ def ws_pivot_blocks(ws):
 def ws_ensure_range(ws, start_row: int, expected_rows: int, header_row: int) -> int:
     """
     Asegura que el rango detectado incluya todas las filas esperadas.
-    Retorna el last_row correcto considerando pivots.
     """
     calculated_last = start_row + expected_rows - 1
     
-    # Verificar límite por pivot
     pivot_top = ws_first_pivot_row(ws)
     if pivot_top and pivot_top > header_row:
         if calculated_last >= pivot_top:
@@ -1036,22 +928,17 @@ def ws_apply_borders_to_range(ws, start_row: int, end_row: int, start_col: int, 
     Aplica bordes a un rango completo de celdas.
     """
     try:
-        log(f"  🖌️ Aplicando bordes al rango: filas {start_row} a {end_row}, columnas {start_col} a {end_col}")
         
-        # Crear rango completo
         full_range = ws.Range(ws.Cells(start_row, start_col), ws.Cells(end_row, end_col))
         
-        # Aplicar todos los bordes
         for border_id in [7, 8, 9, 10, 11, 12]:
             try:
-                full_range.Borders(border_id).LineStyle = 1      # xlContinuous
-                full_range.Borders(border_id).Weight = 2         # xlThin
-                full_range.Borders(border_id).ColorIndex = -4105 # xlColorIndexAutomatic
+                full_range.Borders(border_id).LineStyle = 1      
+                full_range.Borders(border_id).Weight = 2         
+                full_range.Borders(border_id).ColorIndex = -4105 
             except Exception:
                 continue
-        
-        log(f"  ✅ Bordes aplicados a {end_row - start_row + 1} filas")
-        
+            
     except Exception as e:
         log(f"  ⚠ Error al aplicar bordes: {e}")
 
@@ -1062,30 +949,23 @@ def ws_remove_formatting_from_range(ws, start_row: int, end_row: int, start_col:
     Preserva los formatos de número (General, Contabilidad, etc.) de cada columna.
     """
     try:
-        log(f"  🧹 Limpiando formato visual en rango: filas {start_row} a {end_row}, columnas {start_col} a {end_col}")
         
-        # Procesar columna por columna para preservar formatos numéricos
         for col in range(start_col, end_col + 1):
             try:
-                # Obtener formato de número actual de la primera celda de la columna
                 original_number_format = ws.Cells(start_row, col).NumberFormat
-                
-                # Crear rango de la columna
+
                 col_range = ws.Range(ws.Cells(start_row, col), ws.Cells(end_row, col))
                 
-                # Eliminar negrita
                 try:
                     col_range.Font.Bold = False
                 except Exception:
                     pass
                 
-                # Eliminar color de fondo (volver a blanco/sin color)
                 try:
-                    col_range.Interior.ColorIndex = 0  # xlColorIndexNone
+                    col_range.Interior.ColorIndex = 0  
                 except Exception:
                     pass
                 
-                # Restaurar formato de número original
                 try:
                     col_range.NumberFormat = original_number_format
                 except Exception:
@@ -1094,8 +974,7 @@ def ws_remove_formatting_from_range(ws, start_row: int, end_row: int, start_col:
             except Exception:
                 continue
         
-        log(f"  ✓ Formato visual limpiado (formatos numéricos preservados)")
-        
+       
     except Exception as e:
         log(f"  ⚠ Error al limpiar formato: {e}")
 
@@ -1103,7 +982,6 @@ def ws_remove_formatting_from_range(ws, start_row: int, end_row: int, start_col:
 def ws_update_subtotal_formula(ws, formula_row: int, last_data_row: int):
     """Actualiza la fórmula de subtotal en la fila 1 para que abarque todo el rango."""
     try:
-        log(f"  📐 Actualizando fórmulas de subtotal en fila {formula_row}...")
         
         used_cols = ws.UsedRange.Columns.Count
         updated_count = 0
@@ -1124,12 +1002,7 @@ def ws_update_subtotal_formula(ws, formula_row: int, last_data_row: int):
                         updated_count += 1
                         
             except Exception:
-                continue
-        
-        if updated_count > 0:
-            log(f"  ✓ {updated_count} fórmulas de subtotal actualizadas")
-        else:
-            log(f"  ℹ No se encontraron fórmulas SUBTOTAL para actualizar")
+                continue      
         
     except Exception as e:
         log(f"  ⚠ Error al actualizar fórmulas de subtotal: {e}")
@@ -1138,11 +1011,9 @@ def ws_update_subtotal_formula(ws, formula_row: int, last_data_row: int):
 def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
     """
     Agrega subtotales al final de todos los registros para EXISTENCIA y TOTAL INV.
-    Aplica formato azul como encabezado, negrita, bordes y formato numérico adecuado.
-    SOLO aplica bordes a las celdas con subtotales, no a toda la fila.
     """
     try:
-        log(f"  🧮 Agregando subtotales finales en fila {last_data_row + 1}...")
+        log(f"Agregando subtotales finales en fila {last_data_row + 1}...")
         
         subtotal_row = last_data_row + 1
         
@@ -1153,57 +1024,38 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
                 exist_col = col
                 break
         
-        # Buscar columna TOTAL INV
-        total_inv_col = hdrn.get(_norm("TOTAL INV"))
-        
-        # Obtener color azul del encabezado
+
+        total_inv_col = hdrn.get(_norm("TOTAL INV"))      
         header_color = None
         try:
             header_color = ws.Cells(header_row, 1).Interior.Color
         except Exception:
-            header_color = 15849925  # Azul claro por defecto (RGB: 221, 235, 247)
+            header_color = 15849925  
         
         subtotals_added = 0
 
-                
-        # Subtotal EXISTENCIA
         if exist_col:
             try:
                 col_letter = _col_num_to_letter(exist_col)
-                # CAMBIO: Usar función 9 en lugar de 109
                 formula = f"=SUBTOTAL(9,{col_letter}{header_row + 1}:{col_letter}{last_data_row})"
                 
-                cell = ws.Cells(subtotal_row, exist_col)
-                
-                # Aplicar fórmula y calcular
+                cell = ws.Cells(subtotal_row, exist_col)               
                 cell.Formula = formula
-                
-                # LOGGING ADICIONAL PARA DIAGNÓSTICO
-                log(f"    🔍 Diagnóstico de fórmula:")
-                log(f"       Fórmula: {formula}")
-                log(f"       Rango: {col_letter}{header_row + 1}:{col_letter}{last_data_row}")
-                log(f"       Filas incluidas: {last_data_row - header_row}")
                 
                 try:
                     cell.Calculate()
                     valor = cell.Value
-                    log(f"    ℹ Valor calculado por SUBTOTAL: {valor}")
                     
-                    # Mantener el valor
                     if valor is not None:
                         cell.Value = valor
-                        log(f"    ℹ Valor usado: {valor}")
+
                 except Exception as e:
                     log(f"    ⚠ No se pudo calcular valor: {e}")
                 
-                # Aplicar formato
                 cell.NumberFormat = "#.##0"
-                
-                # Aplicar estilos visuales
                 cell.Font.Bold = True
                 cell.Interior.Color = header_color
                 
-                # Aplicar bordes
                 try:
                     for border_id in [7, 8, 9, 10]:
                         cell.Borders(border_id).LineStyle = 1
@@ -1212,14 +1064,10 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
                 except Exception:
                     pass
                 
-                # Verificar formato final
                 formato_final = cell.NumberFormat
                 valor_mostrado = cell.Text
-                log(f"    ℹ Formato final: '{formato_final}', Texto mostrado: '{valor_mostrado}'")
-                
-                subtotals_added += 1
-                log(f"    ✓ Subtotal EXISTENCIA en columna {exist_col}")             
-                       
+
+                subtotals_added += 1                            
                 
             except Exception as e:
                 log(f"    ⚠ Error al agregar subtotal EXISTENCIA: {e}")
@@ -1232,24 +1080,17 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
                 col_letter = _col_num_to_letter(total_inv_col)
                 formula = f"=SUBTOTAL(109,{col_letter}{header_row + 1}:{col_letter}{last_data_row})"
                 
-                cell = ws.Cells(subtotal_row, total_inv_col)
-                
-                # Aplicar fórmula
+                cell = ws.Cells(subtotal_row, total_inv_col)               
                 cell.Formula = formula
-                
-                # Aplicar estilos visuales
                 cell.Font.Bold = True
                 cell.Interior.Color = header_color
-                
-                # Copiar formato de celda superior
+
                 try:
                     original_format = ws.Cells(last_data_row, total_inv_col).NumberFormat
                     cell.NumberFormat = original_format
-                    log(f"    ℹ Formato aplicado a columna I: {original_format}")
                 except Exception as e:
                     log(f"    ⚠ No se pudo copiar formato original: {e}")
-                
-                # Aplicar bordes
+
                 try:
                     for border_id in [7, 8, 9, 10]:
                         cell.Borders(border_id).LineStyle = 1
@@ -1259,13 +1100,12 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
                     pass
                 
                 subtotals_added += 1
-                log(f"    ✓ Subtotal TOTAL INV en columna {total_inv_col}")
                 
             except Exception as e:
                 log(f"    ⚠ Error al agregar subtotal TOTAL INV: {e}")
         
         if subtotals_added > 0:
-            log(f"  ✅ {subtotals_added} subtotales agregados exitosamente con formato")
+            log(f"{subtotals_added} subtotales agregados exitosamente con formato")
         else:
             log(f"  ⚠ No se pudieron agregar subtotales")
         
@@ -1302,14 +1142,14 @@ def _ranges_without_pivots_for_column(col_idx: int, start_row: int, end_row: int
         segments.append((cur, end_row))
     return [(a, b) for (a, b) in segments if b >= a]
 
-# ==== WS UTILS OPTIMIZADOS ====
+# ==== WS UTILS  ====
 def ws_last_row(ws, key_col_idx: int, header_row_visible: int):
     """Última fila con datos."""
     last = ws.Cells(ws.Rows.Count, key_col_idx).End(-4162).Row
     return max(last, header_row_visible)
 
 def ws_fill_column_values(ws, col_idx: int, start_row: int, values: list):
-    """Escribe valores en una columna saltando pivots - OPTIMIZADO."""
+    """Escribe valores en una columna saltando pivots."""
     n = len(values)
     if n == 0:
         return
@@ -1344,7 +1184,7 @@ def ws_clear_column(ws, col_idx: int, start_row: int, end_row: int):
         rng.ClearContents()
 
 def ws_copy_down_formula(ws, col_idx: int, start_row: int, end_row: int):
-    """Copia la fórmula desde start_row hasta end_row - OPTIMIZADO."""
+    """Copia la fórmula desde start_row hasta end_row."""
     if end_row < start_row: return
     fml = ws.Cells(start_row, col_idx).Formula
     if fml:
@@ -1427,7 +1267,7 @@ def normalize_sheet_name(wb, target_name: str) -> str:
     return target_name
 
 def read_range_as_array(ws, start_row: int, end_row: int, col_idx: int):
-    """Lee un rango completo en una sola operación - OPTIMIZADO."""
+    """Lee un rango completo en una sola operación."""
     if end_row < start_row:
         return []
     rng = ws.Range(ws.Cells(start_row, col_idx), ws.Cells(end_row, col_idx))
@@ -1439,7 +1279,7 @@ def read_range_as_array(ws, start_row: int, end_row: int, col_idx: int):
     return [row[0] if isinstance(row, (list, tuple)) else row for row in values]
 
 def write_range_as_array(ws, start_row: int, col_idx: int, values: list):
-    """Escribe un rango completo en una sola operación - OPTIMIZADO."""
+    """Escribe un rango completo en una sola operación."""
     if not values:
         return
     end_row = start_row + len(values) - 1
@@ -1493,7 +1333,6 @@ def main():
     matriz_map = df_matriz_usd.set_index("__REF_MATRIZ__")["__DESC_LISTA__"].to_dict() if len(df_matriz_usd) > 0 else {}
     log(f"Matriz USD: {len(matriz_map)} referencias disponibles para actualizar NOMBRE LISTA")
 
-    
     # Cargar archivos auxiliares para marcas propias
     marcas_propias = cargar_marcas(BASE_PATH)
     log(f"Marcas propias: {len(marcas_propias)} marcas cargadas")
@@ -1546,7 +1385,6 @@ def main():
         normalized_inv_name = ws_inv_orig.Name
 
     # 4) ELIMINAR hoja INVENTARIO COPIA si existe
-    log("Verificando y eliminando hoja INVENTARIO COPIA existente...")
     try:
         excel.DisplayAlerts = False
         for i in range(1, wb.Worksheets.Count + 1):
@@ -1617,7 +1455,7 @@ def main():
     last_row = initial_last_row
 
     # 7) LIMPIAR columnas en INVENTARIO COPIA
-    # IMPORTANTE: Calcular el rango máximo esperado ANTES de limpiar
+    # Calcular el rango máximo esperado ANTES de limpiar
     log("Calculando rango esperado para limpieza...")
     expected_rows = len(df_src["__REFERENCIA__"])
     max_last_row = ws_ensure_range(ws_inv_copia, start_data_row, expected_rows, header_row_used)
@@ -1627,7 +1465,7 @@ def main():
         cidx = hdrn_copia.get(_norm(colname))
         if cidx:
             ws_clear_column(ws_inv_copia, cidx, start_data_row, max_last_row)
-            log(f"  - Limpiada columna: {colname}")
+
 
     # 8) Limpiar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Limpiando REFERENCIA FERTRAC en INV LISTA PRECIOS...")
@@ -1687,7 +1525,6 @@ def main():
             has_slash = any("/" in str(v) for v in values if v not in (None, "", np.nan))
             
             if has_slash:
-                log(f"  - Detectadas referencias con '/' - aplicando protección...")
                 
                 rng = ws_inv_copia.Range(
                     ws_inv_copia.Cells(start_data_row, cidx),
@@ -1731,13 +1568,13 @@ def main():
                 except Exception:
                     pass
                 
-                log(f"  - Pegada columna: {col_name} (formato número, alineación izquierda)")
+                log(f"Pegada columna: {col_name} (formato número, alineación izquierda)")
                 return
         
         ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
         if number_format:
             ws_inv_copia.Columns(cidx).NumberFormat = number_format
-        log(f"  - Pegada columna: {col_name}")
+
 
     paste_if_exists("REFERENCIA", ref_values, number_format="0")
     paste_if_exists("NOMBRE ODOO", nombre_odoo)
@@ -1773,12 +1610,9 @@ def main():
     # APLICAR BORDES A TODO EL RANGO
     log("Aplicando bordes a todo el rango de datos...")
     try:
-        # Determinar rango de columnas
         used_range = ws_inv_copia.UsedRange
         first_col = used_range.Column
         last_col = first_col + used_range.Columns.Count - 1
-        
-        # Aplicar bordes desde el encabezado hasta la última fila con datos
         ws_apply_borders_to_range(ws_inv_copia, header_row_used, last_row, first_col, last_col)
         
     except Exception as e:
@@ -1790,8 +1624,6 @@ def main():
         used_range = ws_inv_copia.UsedRange
         first_col = used_range.Column
         last_col = first_col + used_range.Columns.Count - 1
-        
-        # Limpiar formato en toda la zona de datos (excepto encabezado)
         ws_remove_formatting_from_range(ws_inv_copia, start_data_row, last_row, first_col, last_col)
         
     except Exception as e:
@@ -1810,18 +1642,16 @@ def main():
         cidx = hdrn_copia.get(_norm(colname))
         if cidx:
             ws_copy_down_formula(ws_inv_copia, cidx, start_data_row, last_row)
-            log(f"  - Fórmula arrastrada: {colname}")
 
     col_total_inv = hdrn_copia.get(_norm("TOTAL INV"))
     if col_total_inv:
         ws_copy_down_formula(ws_inv_copia, col_total_inv, start_data_row, last_row)
-        log("  - Fórmula arrastrada: TOTAL INV")
 
     col_exist = ws_ensure_existencia_header(ws_inv_copia, header_row_used)
     ws_copy_down_formula(ws_inv_copia, col_exist, start_data_row, last_row)
-    log("  - Fórmula arrastrada: EXISTENCIA")
 
-    # 11) NUEVO: Actualizar NOMBRE LISTA desde Matriz USD
+
+    # 11)Actualizar NOMBRE LISTA desde Matriz USD
     log("Actualizando NOMBRE LISTA desde Matriz USD...")
     if len(matriz_map) > 0:
         try:
@@ -1844,7 +1674,7 @@ def main():
                         descripciones.append("0")
                 
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_lista, descripciones)
-                log(f"  ✓ {matched_count} descripciones actualizadas desde Matriz USD")
+                log(f"{matched_count} descripciones actualizadas desde Matriz USD")
             else:
                 log("  ⚠ Columna 'NOMBRE LISTA' no encontrada en INVENTARIO COPIA")
         except Exception as e:
@@ -1854,7 +1684,7 @@ def main():
     else:
         log("  ⚠ No hay datos de Matriz USD disponibles - saltando actualización de NOMBRE LISTA")
 
-    # 11.5) NUEVO: Llenar NOMBRE MYR con prioridad NOMBRE LISTA -> NOMBRE ODOO
+    # 11.5) Llenar NOMBRE MYR con prioridad NOMBRE LISTA -> NOMBRE ODOO
     log("Actualizando NOMBRE MYR (prioridad: NOMBRE LISTA → NOMBRE ODOO)...")
     try:
         col_nombre_myr = hdrn_copia.get(_norm("NOMBRE MYR"))
@@ -1887,17 +1717,17 @@ def main():
                         nombres_myr.append("")
                 
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_myr)
-                log(f"  ✓ NOMBRE MYR actualizado: {from_lista} desde NOMBRE LISTA, {from_odoo} desde NOMBRE ODOO")
+                log(f"NOMBRE MYR actualizado: {from_lista} desde NOMBRE LISTA, {from_odoo} desde NOMBRE ODOO")
                 
             elif col_nombre_lista:
                 nombres_lista = read_range_as_array(ws_inv_copia, start_data_row, last_row, col_nombre_lista)
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_lista)
-                log(f"  ✓ NOMBRE MYR copiado desde NOMBRE LISTA")
+                log(f"NOMBRE MYR copiado desde NOMBRE LISTA")
                 
             elif col_nombre_odoo:
                 nombres_odoo = read_range_as_array(ws_inv_copia, start_data_row, last_row, col_nombre_odoo)
                 write_range_as_array(ws_inv_copia, start_data_row, col_nombre_myr, nombres_odoo)
-                log(f"  ✓ NOMBRE MYR copiado desde NOMBRE ODOO")
+                log(f"NOMBRE MYR copiado desde NOMBRE ODOO")
             else:
                 log("  ⚠ No se encontraron columnas NOMBRE LISTA ni NOMBRE ODOO")
         else:
@@ -1908,8 +1738,8 @@ def main():
         import traceback
         log(traceback.format_exc())
 
-    # 12) Llevar EXISTENCIA_CALC en INVENTARIO COPIA - OPTIMIZADO
-    log("Escribiendo EXISTENCIA consolidada en INVENTARIO COPIA (MODO OPTIMIZADO)...")
+    # 12) Llevar EXISTENCIA_CALC en INVENTARIO COPIA 
+    log("Escribiendo EXISTENCIA consolidada en INVENTARIO COPIA .")
     try:
         refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
         refs_copia = [to_num_str(r) for r in refs_copia]
@@ -1930,12 +1760,12 @@ def main():
                 existencias.append(0)
         
         write_range_as_array(ws_inv_copia, start_data_row, col_exist, existencias)
-        log(f"✓ {valores_encontrados} existencias actualizadas, {len(existencias) - valores_encontrados} con valor 0")
+        log(f"{valores_encontrados} existencias actualizadas, {len(existencias) - valores_encontrados} con valor 0")
     except Exception as e:
         log(f"⚠ Error al escribir existencias: {e}")
 
-    # 13) Traer columnas desde INVENTARIO ORIGINAL - OPTIMIZADO (MOVIDO DESPUÉS DE EXISTENCIAS)
-    log("Trayendo columnas desde INVENTARIO ORIGINAL por REFERENCIA (MODO OPTIMIZADO)...")
+    # 13) Traer columnas desde INVENTARIO ORIGINAL
+    log("Trayendo columnas desde INVENTARIO ORIGINAL por REFERENCIA.")
     try:
         hr_orig, hdr_orig, hdrn_orig = ws_headers_smart(ws_inv_orig, HEADER_ROW_INV, ["REFERENCIA"])
         ref_idx_orig = hdrn_orig.get(_norm("REFERENCIA")) or find_reference_col_idx(hdrn_orig, ws_inv_orig, hr_orig)
@@ -1956,7 +1786,6 @@ def main():
                 cidx = hdrn_orig.get(_norm(colname))
                 if cidx:
                     cols_to_read[cidx] = colname
-                    log(f"  - Preparando lectura de columna: {colname}")
             
             if len(cols_to_read) <= 1:
                 log("⚠ No hay columnas adicionales para traer")
@@ -1973,7 +1802,6 @@ def main():
                         continue
                     colname = cols_to_read[col_idx]
                     maps[colname] = dict(zip(refs_orig_normalized, all_data[col_idx]))
-                    log(f"    ✓ Mapa creado para {colname}: {len(maps[colname])} valores")
                 
                 log("Leyendo referencias de INVENTARIO COPIA...")
                 refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
@@ -1997,12 +1825,9 @@ def main():
                             values_to_write.append("")
                     
                     write_range_as_array(ws_inv_copia, start_data_row, tgt_idx, values_to_write)
-                    log(f"    ✓ Columna '{colname}' escrita: {matched} coincidencias de {len(values_to_write)} filas")
                 
-                log(f"✓ Columnas traídas exitosamente desde INVENTARIO ORIGINAL (modo optimizado)")
+                log(f"Columnas traídas exitosamente desde INVENTARIO ORIGINAL")
                 
-                # NUEVO: Centrar columna INV BODEGA GERENCIA
-                log("Aplicando formato centrado a INV BODEGA GERENCIA...")
                 try:
                     inv_bodega_idx = hdrn_copia.get(_norm("INV BODEGA GERENCIA"))
                     if inv_bodega_idx:
@@ -2011,7 +1836,7 @@ def main():
                             ws_inv_copia.Cells(last_row, inv_bodega_idx)
                         )
                         rng.HorizontalAlignment = -4108  # xlCenter
-                        log("  ✓ Columna INV BODEGA GERENCIA centrada")
+ 
                     else:
                         log("  ⚠ Columna INV BODEGA GERENCIA no encontrada")
                 except Exception as e:
@@ -2022,7 +1847,7 @@ def main():
         import traceback
         log(traceback.format_exc())
 
-    # AGREGAR SUBTOTALES FINALES (MOVIDO AQUÍ - DESPUÉS DE ESCRIBIR TODOS LOS DATOS)
+    # AGREGAR SUBTOTALES FINALES 
     log("Agregando subtotales finales...")
     try:
         ws_add_final_subtotals(ws_inv_copia, last_row, header_row_used, hdrn_copia)
@@ -2030,17 +1855,14 @@ def main():
         log(f"⚠ Error al agregar subtotales finales: {e}")
 
     # Inmovilizar las dos primeras filas
-    log("Inmovilizando las dos primeras filas...")
     try:
         # Seleccionar la celda A3 (fila 3, columna 1)
         ws_inv_copia.Cells(3, 1).Select()
-        # Inmovilizar paneles
         excel.ActiveWindow.FreezePanes = True
-        log("✓ Primeras dos filas inmovilizadas")
     except Exception as e:
         log(f"⚠ Error al inmovilizar paneles: {e}")
 
-    # NUEVO: Aplicar reglas de marcas propias (después del paso 13)
+    # Aplicar reglas de marcas propias 
     log("Aplicando reglas de negocio para marcas propias...")
     aplicar_reglas_marcas_propias(
         ws_inv_copia, 
@@ -2089,7 +1911,7 @@ def main():
                 except Exception as e:
                     log(f"Aviso: no se pudo aplicar formato numérico: {e}")
                 
-                log(f"✓ {len(referencias_copia)} referencias copiadas a REFERENCIA FERTRAC")
+                log(f"{len(referencias_copia)} referencias copiadas a REFERENCIA FERTRAC")
             else:
                 log("No se encontró columna REFERENCIA FERTRAC")
         else:
@@ -2131,7 +1953,7 @@ def main():
 
     log("Restaurando cálculo automático...")
     try:
-        excel.Calculation = -4105  # xlCalculationAutomatic
+        excel.Calculation = -4105  
     except Exception as e:
         log(f"Aviso al restaurar cálculo: {e}")
 
