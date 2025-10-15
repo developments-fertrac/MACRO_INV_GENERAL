@@ -1412,6 +1412,93 @@ def _ranges_without_pivots_for_column(col_idx: int, start_row: int, end_row: int
         segments.append((cur, end_row))
     return [(a, b) for (a, b) in segments if b >= a]
 
+def aplicar_autofiltros_y_ordenar(ws, header_row: int, last_row: int, hdrn: dict):
+    """
+    Aplica autofiltros a todos los encabezados y ordena por TOTAL INV de mayor a menor.
+    """
+    try:
+        log("=" * 60)
+        log("APLICANDO AUTOFILTROS Y ORDENAMIENTO...")
+        
+        # Buscar columna TOTAL INV
+        total_inv_col = hdrn.get(_norm("TOTAL INV"))
+        
+        if not total_inv_col:
+            log("  ⚠ Columna TOTAL INV no encontrada")
+            log(f"  Columnas disponibles: {list(hdrn.keys())}")
+            return
+        
+        log(f"  ✓ Columna TOTAL INV encontrada: índice {total_inv_col}")
+        
+        # Determinar el rango completo para el autofiltro
+        used_range = ws.UsedRange
+        first_col = used_range.Column
+        last_col = first_col + used_range.Columns.Count - 1
+        
+        log(f"  Rango de datos: filas {header_row} a {last_row}, columnas {first_col} a {last_col}")
+        
+        # Crear el rango del encabezado
+        header_range = ws.Range(
+            ws.Cells(header_row, first_col),
+            ws.Cells(last_row, last_col)
+        )
+        
+        # Aplicar AutoFilter
+        try:
+            # Si ya existe un AutoFilter, quitarlo primero
+            if ws.AutoFilterMode:
+                ws.AutoFilterMode = False
+                log("  • AutoFilter anterior eliminado")
+            
+            # Aplicar el AutoFilter al rango
+            header_range.AutoFilter()
+            log(f"  ✓ Autofiltros aplicados desde fila {header_row}")
+        except Exception as e:
+            log(f"  ⚠ Error al aplicar autofiltros: {e}")
+            return
+        
+        # Ordenar por TOTAL INV de MAYOR A MENOR
+        try:
+            log(f"  Preparando ordenamiento por columna {total_inv_col} (TOTAL INV)...")
+            
+            # Crear la clave de ordenamiento
+            sort_key = ws.Cells(header_row, total_inv_col)
+            
+            log(f"  Aplicando Sort: Key1=columna {total_inv_col}, Order1=2 (descendente)...")
+            
+            # Aplicar el ordenamiento usando Sort
+            header_range.Sort(
+                Key1=sort_key,
+                Order1=2,  # 🔥 xlDescending = 2 (MAYOR A MENOR)
+                Header=1,  # xlYes = 1 (tiene encabezado)
+                MatchCase=False,
+                Orientation=1  # xlTopToBottom = 1
+            )
+            
+            log(f"  ✓ Datos ordenados por TOTAL INV (MAYOR A MENOR)")
+            
+            # Verificar el ordenamiento leyendo las primeras filas
+            log("  Verificando ordenamiento (primeras 5 filas):")
+            for row in range(header_row + 1, min(header_row + 6, last_row + 1)):
+                try:
+                    valor = ws.Cells(row, total_inv_col).Value
+                    log(f"    Fila {row}: {valor}")
+                except:
+                    pass
+                    
+        except Exception as e:
+            log(f"  ⚠ ERROR al ordenar por TOTAL INV: {e}")
+            import traceback
+            log(traceback.format_exc())
+        
+        log("✅ Autofiltros y ordenamiento completados")
+        log("=" * 60)
+        
+    except Exception as e:
+        log(f"  ⚠ ERROR CRÍTICO al aplicar autofiltros y ordenar: {e}")
+        import traceback
+        log(traceback.format_exc())
+
 # ==== WS UTILS  ====
 def ws_last_row(ws, key_col_idx: int, header_row_visible: int):
     """Última fila con datos."""
@@ -2161,7 +2248,8 @@ def main():
         hdrn_copia,
         BASE_PATH
     )
-    # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
+
+# 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
     try:
         ws_lp = None
@@ -2207,7 +2295,7 @@ def main():
     except Exception as e:
         log(f"Error al llenar REFERENCIA FERTRAC: {e}")
 
-    # 15) GUARDADO COMO ARCHIVO NUEVO
+    # 15) GUARDADO COMO ARCHIVO NUEVO (SIN ORDENAR TODAVÍA)
     log("Preparando guardado del archivo...")
 
     try:
@@ -2238,21 +2326,41 @@ def main():
     out_name = f"{base_name} {datetime.now():%Y%m%d_%H%M}.xlsx"
     out_path = BASE_PATH / out_name
 
-    log("Restaurando cálculo automático...")
-    try:
-        excel.Calculation = -4105  
-    except Exception as e:
-        log(f"Aviso al restaurar cálculo: {e}")
-
-    log(f"Guardando archivo: {out_name}")
+    log(f"Guardando archivo (sin ordenar): {out_name}")
     apply_pw = saveinfo.get("reapply_password")
     if apply_pw:
         wb.SaveAs(str(out_path), FileFormat=51, Password=apply_pw)
     else:
         wb.SaveAs(str(out_path), FileFormat=51)
 
-    log(f"✅ Archivo NUEVO creado: {out_path}")
+    log(f"✅ Archivo guardado: {out_path}")
 
+    # 🔥 AHORA SÍ: Aplicar ordenamiento DESPUÉS de guardar
+    log("Aplicando autofiltros y ordenamiento por TOTAL INV...")
+    try:
+        # Activar la hoja INVENTARIO COPIA
+        ws_inv_copia.Activate()
+        
+        aplicar_autofiltros_y_ordenar(ws_inv_copia, header_row_used, last_row, hdrn_copia)
+        
+        # Restaurar cálculo automático AHORA
+        log("Restaurando cálculo automático...")
+        try:
+            excel.Calculation = -4105  
+        except Exception as e:
+            log(f"Aviso al restaurar cálculo: {e}")
+        
+        # GUARDAR DE NUEVO con el ordenamiento aplicado
+        log("💾 Guardando archivo con ordenamiento...")
+        wb.Save()
+        log("✅ Ordenamiento guardado exitosamente")
+        
+    except Exception as e:
+        log(f"⚠ Error al aplicar ordenamiento: {e}")
+        import traceback
+        log(traceback.format_exc())
+
+    # Cerrar Excel
     excel_close(excel, wb, save=False)
 
     tmp = saveinfo.get("tmp_path")
