@@ -15,7 +15,7 @@ import tempfile
 BASE_PATH = Path(__file__).resolve().parent  
 
 PASS_INV = "Compras2025"
-PASSWORDS_TRY = ["Compras2025"]
+PASSWORDS_TRY = ["Compras2025", "Compras2026"]
 
 OUTPUT_BASENAME = "$2025 INVENTARIO GENERAL ACTUALIZADO"
 APPLY_PASSWORD_TO_OUTPUT = True
@@ -26,6 +26,8 @@ PFX_VAL_GENERAL     = "VALORIZADO GENERAL"
 PFX_VAL_FALT_IMPO   = "VALORIZADO FALTANTES IMPO"
 PFX_VAL_FALT        = "VALORIZADO FALTANTES"
 PFX_VAL_TOBERIN     = "VALORIZADO TOBERIN"
+PFX_MARCAS          = "MARCAS"
+PFX_DISTRIBUCION    = "DISTRIBUCION DE MATRICES"
 
 # Nuevo: Matriz USD
 PFX_MATRIZ_USD = "$2025 MATRIZ USD"
@@ -362,9 +364,6 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
 def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
     """
     Carga el archivo MATRIZ USD, hoja 2025.
-    Retorna DataFrame con columnas:
-    - __REF_MATRIZ__: Referencia Inventario Fertrac normalizada
-    - __DESC_LISTA__: Descripción Lista Precios
     """
     try:
         p = find_by_prefix(base_dir, PFX_MATRIZ_USD)
@@ -478,6 +477,427 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
         log(traceback.format_exc())
         log(f"  Se continuará sin actualizar NOMBRE LISTA desde Matriz USD.")
         return pd.DataFrame(columns=["__REF_MATRIZ__", "__DESC_LISTA__"])
+    
+def cargar_marcas(base_dir: Path) -> set:
+    """
+    Carga el archivo MARCAS y retorna un set con las marcas propias.
+    El archivo tiene las marcas en la columna B (sin encabezado).
+    """
+    try:
+        p = find_by_prefix(base_dir, PFX_MARCAS)
+        log(f"Abriendo archivo MARCAS: {p.name}")
+        
+        src = open_as_excel_source(p, PASSWORDS_TRY)
+        
+        # Leer sin encabezado ya que el archivo empieza directamente con datos
+        df = pd.read_excel(src, sheet_name=0, engine="openpyxl", header=None)
+        
+        # Las marcas están en la columna B (índice 1)
+        marcas_propias = set()
+        
+        # Buscar la columna que contiene las marcas (puede ser A o B)
+        for col_idx in range(min(3, len(df.columns))):
+            for val in df[col_idx].dropna():
+                val_str = str(val).strip().upper()
+                # Verificar que sea una marca válida (no vacío, no números puros)
+                if val_str and val_str not in ("", "NONE", "NAN", "MARCA", "MARCAS"):
+                    # Verificar que tenga letras
+                    if any(c.isalpha() for c in val_str):
+                        marcas_propias.add(val_str)
+        
+        log(f"  ✓ {len(marcas_propias)} marcas propias cargadas")
+        log(f"  Ejemplos: {list(marcas_propias)[:5]}")
+        return marcas_propias
+        
+    except FileNotFoundError:
+        log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MARCAS}'")
+        return set()
+    except Exception as e:
+        log(f"⚠ ERROR al cargar MARCAS: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return set()
+
+
+def cargar_distribucion(base_dir: Path) -> dict:
+    """
+    Carga el archivo DISTRIBUCIÓN DE MATRICES OCTUBRE.
+    Estructura esperada:
+    - Columna B (LINEA): nombre de la línea/marca
+    - Columna D (GESTOR): nombre del gestor
+    - Columna C (CATEGORIA): clasificación
+    
+    Retorna un diccionario con:
+    - 'gestor': dict {marca_normalizada: gestor/lider}
+    - 'clasificacion': dict {marca_normalizada: clasificacion}
+    """
+    try:
+        p = find_by_prefix(base_dir, PFX_DISTRIBUCION)
+        log(f"Abriendo archivo DISTRIBUCIÓN: {p.name}")
+        
+        src = open_as_excel_source(p, PASSWORDS_TRY)
+        
+        # Leer todas las hojas disponibles
+        xf = pd.ExcelFile(src, engine="openpyxl")
+        
+        # Buscar la hoja correcta (puede llamarse "DISTRIBUCION MATRICES" o similar)
+        sheet_name = None
+        for sn in xf.sheet_names:
+            if "DISTRIBUCION" in _norm(sn) or "MATRICES" in _norm(sn):
+                sheet_name = sn
+                break
+        
+        if not sheet_name:
+            sheet_name = xf.sheet_names[0]
+        
+        log(f"  Usando hoja: {sheet_name}")
+        
+        # Leer con encabezados detectados automáticamente
+        # Buscar la fila de encabezados (puede no estar en la primera fila)
+        df_raw = pd.read_excel(src, sheet_name=sheet_name, engine="openpyxl", header=None)
+        
+        # Buscar la fila que contiene "LINEA", "GESTOR", etc.
+        header_row = None
+        for idx in range(min(10, len(df_raw))):
+            row_str = ' '.join([str(v).upper() for v in df_raw.iloc[idx] if pd.notna(v)])
+            if "LINEA" in row_str and "GESTOR" in row_str:
+                header_row = idx
+                log(f"  Encabezados encontrados en fila {idx + 1}")
+                break
+        
+        if header_row is None:
+            header_row = 2  # Por defecto, basado en la imagen (fila 3)
+        
+        # Leer con el encabezado correcto
+        df = pd.read_excel(src, sheet_name=sheet_name, engine="openpyxl", header=header_row)
+        
+        # Limpiar nombres de columnas
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        log(f"  Columnas detectadas: {list(df.columns)}")
+        
+        # Buscar columnas específicas
+        idx = {_norm(c): c for c in df.columns}
+        
+        # Columna LINEA (columna B en la imagen)
+        linea_col = (
+            idx.get("linea") or idx.get("línea") or idx.get("marca")
+            or next((real for kn, real in idx.items() if "linea" in kn or "línea" in kn), None)
+        )
+        
+        # Columna GESTOR (columna D en la imagen)
+        gestor_col = (
+            idx.get("gestor") or idx.get("lider") or idx.get("líder") 
+            or next((real for kn, real in idx.items() if "gestor" in kn or "lider" in kn), None)
+        )
+        
+        # Columna CATEGORIA/CLASIFICACION (columna C en la imagen)
+        clasif_col = (
+            idx.get("categoria") or idx.get("categoría") or idx.get("clasificacion") 
+            or idx.get("clasificación") or idx.get("tipo")
+            or next((real for kn, real in idx.items() if "categ" in kn or "clasificac" in kn), None)
+        )
+        
+        if not linea_col:
+            log(f"  ⚠ No se encontró columna de LINEA/MARCA")
+            return {'gestor': {}, 'clasificacion': {}}
+        
+        log(f"  Columnas mapeadas:")
+        log(f"    - LINEA: {linea_col}")
+        log(f"    - GESTOR: {gestor_col if gestor_col else 'NO ENCONTRADA'}")
+        log(f"    - CATEGORIA: {clasif_col if clasif_col else 'NO ENCONTRADA'}")
+        
+        # Crear diccionarios de mapeo
+        gestor_map = {}
+        clasif_map = {}
+        
+        # Procesar cada fila
+        for idx_row, row in df.iterrows():
+            # Obtener valor de LINEA
+            linea_val = row[linea_col] if linea_col in row.index else None
+            if pd.isna(linea_val) or str(linea_val).strip() == "":
+                continue
+            
+            linea_str = str(linea_val).strip().upper()
+            
+            # Limpiar etiquetas como "(EN DESARROLLO)"
+            linea_key = re.sub(r'\s*\([^)]*\)\s*', '', linea_str).strip()
+            
+            if not linea_key:
+                continue
+            
+            # Mapear gestor
+            if gestor_col and gestor_col in row.index:
+                gestor_val = row[gestor_col]
+                if not pd.isna(gestor_val) and str(gestor_val).strip():
+                    gestor_map[linea_key] = str(gestor_val).strip()
+            
+            # Mapear clasificación/categoría
+            if clasif_col and clasif_col in row.index:
+                clasif_val = row[clasif_col]
+                if not pd.isna(clasif_val) and str(clasif_val).strip():
+                    clasif_map[linea_key] = str(clasif_val).strip()
+        
+        log(f"  ✓ {len(gestor_map)} gestores cargados")
+        log(f"  ✓ {len(clasif_map)} clasificaciones cargadas")
+        
+        if gestor_map:
+            log(f"  Ejemplos de gestores: {list(gestor_map.items())[:3]}")
+        if clasif_map:
+            log(f"  Ejemplos de clasificaciones: {list(clasif_map.items())[:3]}")
+        
+        return {
+            'gestor': gestor_map,
+            'clasificacion': clasif_map
+        }
+        
+    except FileNotFoundError:
+        log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_DISTRIBUCION}'")
+        return {'gestor': {}, 'clasificacion': {}}
+    except Exception as e:
+        log(f"⚠ ERROR al cargar DISTRIBUCIÓN: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return {'gestor': {}, 'clasificacion': {}}
+
+
+def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: int, 
+                                   ref_col_idx: int, hdrn_copia: dict, 
+                                   marcas_propias: set, distribucion: dict):
+    """
+    Aplica las reglas de negocio para referencias de marcas propias:
+    """
+    try:
+        log("Aplicando reglas para marcas propias...")
+        
+        # Obtener índices de columnas
+        col_linea_copia = hdrn_copia.get(_norm("LINEA COPIA"))
+        col_marca_sistema = hdrn_copia.get(_norm("MARCA SISTEMA")) or hdrn_copia.get(_norm("Marca sistema"))
+        col_marca_copia = hdrn_copia.get(_norm("MARCA COPIA")) or hdrn_copia.get(_norm("MARCA copia"))
+        col_inv_bodega_ger = hdrn_copia.get(_norm("INV BODEGA GERENCIA"))
+        col_sublinea_copia = hdrn_copia.get(_norm("SUB-LINEA COPIA"))
+        col_lider_linea = hdrn_copia.get(_norm("LIDER LINEA"))
+        col_clasificacion = hdrn_copia.get(_norm("CLASIFICACION"))
+        
+        if not col_linea_copia or not col_marca_sistema:
+            log("  ⚠ No se encontraron columnas necesarias (LINEA COPIA o MARCA SISTEMA)")
+            log(f"    LINEA COPIA: {'✓' if col_linea_copia else '✗'}")
+            log(f"    MARCA SISTEMA: {'✓' if col_marca_sistema else '✗'}")
+            return
+        
+        log(f"  Columnas detectadas:")
+        log(f"    - REFERENCIA: columna {ref_col_idx}")
+        log(f"    - LINEA COPIA: columna {col_linea_copia}")
+        log(f"    - MARCA SISTEMA: columna {col_marca_sistema}")
+        log(f"    - MARCA COPIA: columna {col_marca_copia if col_marca_copia else 'NO ENCONTRADA'}")
+        log(f"    - INV BODEGA GERENCIA: columna {col_inv_bodega_ger if col_inv_bodega_ger else 'NO ENCONTRADA'}")
+        
+        # Leer datos necesarios de forma optimizada
+        cols_to_read = [ref_col_idx, col_linea_copia, col_marca_sistema]
+        data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
+        
+        referencias = data[ref_col_idx]
+        lineas_copia = data[col_linea_copia]
+        marcas_sistema = data[col_marca_sistema]
+        
+        # Identificar filas que cumplen los filtros
+        filas_a_procesar = []
+        filas_a_eliminar = []
+       
+        # AGREGAR ESTOS CONTADORES:
+        filtro1_rechazados = 0
+        filtro2_rechazados = 0
+
+        log(f"  Analizando {len(referencias)} registros...")
+        
+        for i in range(len(referencias)):
+            ref = str(referencias[i]).strip() if referencias[i] not in (None, "", "None") else ""
+            linea = str(lineas_copia[i]).strip() if lineas_copia[i] not in (None, "", "None") else ""
+            marca = str(marcas_sistema[i]).strip() if marcas_sistema[i] not in (None, "", "None") else ""
+            
+            # Verificar si es una referencia a eliminar (tipo 0041R: 4 dígitos + 1 letra)
+            if ref and re.match(r'^\d{4}[A-Za-z]$', ref):
+                filas_a_eliminar.append((i, ref))
+                continue
+            
+            # Convertir a mayúsculas para comparaciones
+            linea_upper = linea.upper()
+            marca_upper = marca.upper()
+            
+            # Filtro 1: LINEA COPIA debe ser indeterminado, vacío o #N/D
+            if linea or linea_upper in ("INDETERMINADO", "#N/D", "#N/A", "N/A", "NA", "NONE"):
+                continue
+            
+            # Filtro 2: MARCA SISTEMA debe estar en marcas propias
+            if marca_upper not in marcas_propias:
+                continue
+            
+            # Esta fila cumple los filtros
+            filas_a_procesar.append((i, ref, marca))
+        
+        log(f"  📊 Estadísticas de filtrado:")
+        log(f"     - Total analizado: {len(referencias)}")
+        log(f"     - Referencias tipo '0041R': {len(filas_a_eliminar)}")
+        log(f"     - Rechazados por FILTRO 1 (con LINEA COPIA): {filtro1_rechazados}")
+        log(f"     - Rechazados por FILTRO 2 (MARCA no propia): {filtro2_rechazados}")
+        log(f"     - TOTAL que cumplen ambos filtros: {len(filas_a_procesar)}")
+        log(f"     - Verificación: {len(referencias)} = {len(filas_a_eliminar)} + {filtro1_rechazados} + {filtro2_rechazados} + {len(filas_a_procesar)}")
+
+        # Eliminar filas tipo "0041R" (en orden inverso para no afectar índices)
+        if filas_a_eliminar:
+            log(f"  Eliminando referencias tipo '####L':")
+            for idx, ref in filas_a_eliminar[:5]:  # Mostrar solo primeros 5
+                log(f"    - {ref}")
+            if len(filas_a_eliminar) > 5:
+                log(f"    ... y {len(filas_a_eliminar) - 5} más")
+            
+            for idx, ref in sorted(filas_a_eliminar, reverse=True):
+                fila_excel = start_data_row + idx
+                try:
+                    ws_inv_copia.Rows(fila_excel).Delete()
+                except Exception as e:
+                    log(f"    ⚠ Error al eliminar fila {fila_excel} ({ref}): {e}")
+            
+            log(f"  ✓ {len(filas_a_eliminar)} filas eliminadas")
+            
+            # Recalcular last_row después de eliminar
+            last_row = last_row - len(filas_a_eliminar)
+            log(f"  Nuevo rango de datos: hasta fila {last_row}")
+        
+        # Procesar filas que cumplen los filtros
+        if not filas_a_procesar:
+            log("  ℹ No hay registros para procesar después de aplicar filtros")
+            return
+        
+        log(f"  Procesando {len(filas_a_procesar)} registros (modo optimizado por lotes)...")
+        
+        # ⚠️ OPTIMIZACIÓN CRÍTICA: Actualizar por LOTES
+        gestor_map = distribucion.get('gestor', {})
+        clasif_map = distribucion.get('clasificacion', {})
+        
+        # Crear diccionario de fila_excel → valores a escribir
+        updates = {}
+        for idx, ref, marca in filas_a_procesar:
+            fila_excel = start_data_row + idx
+            marca_upper = marca.upper().strip()
+            
+            updates[fila_excel] = {
+                'marca': marca,
+                'inv_bodega': "0",
+                'linea': marca,
+                'sublinea': marca,
+                'lider': gestor_map.get(marca_upper, ""),
+                'clasificacion': clasif_map.get(marca_upper, "")
+            }
+        
+        # Agrupar filas contiguas para optimizar escritura
+        filas_ordenadas = sorted(updates.keys())
+        
+        def agrupar_contiguos(filas):
+            """Agrupa filas contiguas para actualización por rangos"""
+            if not filas:
+                return []
+            grupos = []
+            inicio = filas[0]
+            fin = filas[0]
+            for fila in filas[1:]:
+                if fila == fin + 1:
+                    fin = fila
+                else:
+                    grupos.append((inicio, fin))
+                    inicio = fin = fila
+            grupos.append((inicio, fin))
+            return grupos
+        
+        grupos_contiguos = agrupar_contiguos(filas_ordenadas)
+        log(f"    Agrupados en {len(grupos_contiguos)} bloques contiguos")
+        
+        columnas_actualizadas = 0
+        lideres_encontrados = sum(1 for v in updates.values() if v['lider'])
+        clasif_encontradas = sum(1 for v in updates.values() if v['clasificacion'])
+        
+        # Actualizar MARCA COPIA
+        if col_marca_copia:
+            for inicio, fin in grupos_contiguos:
+                valores = [updates[f]['marca'] for f in range(inicio, fin + 1)]
+                rng = ws_inv_copia.Range(
+                    ws_inv_copia.Cells(inicio, col_marca_copia),
+                    ws_inv_copia.Cells(fin, col_marca_copia)
+                )
+                rng.Value = [[v] for v in valores]
+            columnas_actualizadas += 1
+            log(f"    ✓ MARCA COPIA actualizada")
+        
+        # Actualizar INV BODEGA GERENCIA
+        if col_inv_bodega_ger:
+            for inicio, fin in grupos_contiguos:
+                valores = [updates[f]['inv_bodega'] for f in range(inicio, fin + 1)]
+                rng = ws_inv_copia.Range(
+                    ws_inv_copia.Cells(inicio, col_inv_bodega_ger),
+                    ws_inv_copia.Cells(fin, col_inv_bodega_ger)
+                )
+                rng.Value = [[v] for v in valores]
+            columnas_actualizadas += 1
+            log(f"    ✓ INV BODEGA GERENCIA actualizada")
+        
+        # Actualizar LINEA COPIA
+        if col_linea_copia:
+            for inicio, fin in grupos_contiguos:
+                valores = [updates[f]['linea'] for f in range(inicio, fin + 1)]
+                rng = ws_inv_copia.Range(
+                    ws_inv_copia.Cells(inicio, col_linea_copia),
+                    ws_inv_copia.Cells(fin, col_linea_copia)
+                )
+                rng.Value = [[v] for v in valores]
+            columnas_actualizadas += 1
+            log(f"    ✓ LINEA COPIA actualizada")
+        
+        # Actualizar SUB-LINEA COPIA
+        if col_sublinea_copia:
+            for inicio, fin in grupos_contiguos:
+                valores = [updates[f]['sublinea'] for f in range(inicio, fin + 1)]
+                rng = ws_inv_copia.Range(
+                    ws_inv_copia.Cells(inicio, col_sublinea_copia),
+                    ws_inv_copia.Cells(fin, col_sublinea_copia)
+                )
+                rng.Value = [[v] for v in valores]
+            columnas_actualizadas += 1
+            log(f"    ✓ SUB-LINEA COPIA actualizada")
+        
+        # Actualizar LIDER LINEA
+        if col_lider_linea:
+            for inicio, fin in grupos_contiguos:
+                valores = [updates[f]['lider'] for f in range(inicio, fin + 1)]
+                rng = ws_inv_copia.Range(
+                    ws_inv_copia.Cells(inicio, col_lider_linea),
+                    ws_inv_copia.Cells(fin, col_lider_linea)
+                )
+                rng.Value = [[v] for v in valores]
+            columnas_actualizadas += 1
+            log(f"    ✓ LIDER LINEA actualizada ({lideres_encontrados} líderes asignados)")
+        
+        # Actualizar CLASIFICACION
+        if col_clasificacion:
+            for inicio, fin in grupos_contiguos:
+                valores = [updates[f]['clasificacion'] for f in range(inicio, fin + 1)]
+                rng = ws_inv_copia.Range(
+                    ws_inv_copia.Cells(inicio, col_clasificacion),
+                    ws_inv_copia.Cells(fin, col_clasificacion)
+                )
+                rng.Value = [[v] for v in valores]
+            columnas_actualizadas += 1
+            log(f"    ✓ CLASIFICACION actualizada ({clasif_encontradas} clasificaciones asignadas)")
+        
+        log(f"  ✅ Proceso completado:")
+        log(f"     - {len(updates)} registros procesados")
+        log(f"     - {columnas_actualizadas} columnas actualizadas")
+        log(f"     - {lideres_encontrados} líderes asignados")
+        log(f"     - {clasif_encontradas} clasificaciones asignadas")
+        
+    except Exception as e:
+        log(f"  ⚠ ERROR al aplicar reglas de marcas propias: {e}")
+        import traceback
+        log(traceback.format_exc())
 
 # ==== EXCEL COM ====
 def excel_open(path: Path, password: str | None = None):
@@ -1068,10 +1488,18 @@ def main():
     df_val_falt  = cargar_valorizado(BASE_PATH, PFX_VAL_FALT)
     df_val_tob   = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN)
 
-    # NUEVO: Cargar Matriz USD
+    # Cargar Matriz USD
     df_matriz_usd = cargar_matriz_usd(BASE_PATH)
     matriz_map = df_matriz_usd.set_index("__REF_MATRIZ__")["__DESC_LISTA__"].to_dict() if len(df_matriz_usd) > 0 else {}
     log(f"Matriz USD: {len(matriz_map)} referencias disponibles para actualizar NOMBRE LISTA")
+
+    
+    # Cargar archivos auxiliares para marcas propias
+    marcas_propias = cargar_marcas(BASE_PATH)
+    log(f"Marcas propias: {len(marcas_propias)} marcas cargadas")
+    
+    distribucion = cargar_distribucion(BASE_PATH)
+    log(f"Distribución: {len(distribucion['gestor'])} gestores, {len(distribucion['clasificacion'])} clasificaciones")
 
     # Join de cantidades
     val_map_impo = df_val_impo.set_index("__REF_INT__")["__CANT__"]
@@ -1611,6 +2039,18 @@ def main():
         log("✓ Primeras dos filas inmovilizadas")
     except Exception as e:
         log(f"⚠ Error al inmovilizar paneles: {e}")
+
+    # NUEVO: Aplicar reglas de marcas propias (después del paso 13)
+    log("Aplicando reglas de negocio para marcas propias...")
+    aplicar_reglas_marcas_propias(
+        ws_inv_copia, 
+        start_data_row, 
+        last_row, 
+        ref_col_idx, 
+        hdrn_copia, 
+        marcas_propias, 
+        distribucion
+    )
 
     # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
