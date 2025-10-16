@@ -2128,7 +2128,6 @@ def main():
     paste_if_exists("Marca sistema", marca_sys)
     paste_if_exists("Linea sistema", linea_sys)
     paste_if_exists("Sub- linea sistema", sublinea_sys)
-    paste_if_exists("COSTO PROMEDIO", costo_prom)
 
     log("Recalculando rango de datos después de pegar...")
     new_last_row = start_data_row + len(ref_values) - 1
@@ -2438,6 +2437,78 @@ def main():
         hdrn_copia,
         BASE_PATH
     )
+
+    # SOLUCIÓN PARA REQUERIMIENTO 18
+    # Agregar este código DESPUÉS de la línea 741 (después de arrastrar fórmulas)
+
+    # LLENAR COSTO PROMEDIO ==========
+    log("Actualizando COSTO PROMEDIO después de calcular existencias...")
+    try:
+        col_costo_promedio = hdrn_copia.get(_norm("COSTO PROMEDIO"))
+        
+        if not col_costo_promedio:
+            log("  ⚠ Columna COSTO PROMEDIO no encontrada en INVENTARIO COPIA")
+        else:
+            # Verificar que tenemos los datos de costo desde el archivo fuente
+            if "__COSTO__" in df_src.columns:
+                # Leer referencias actuales de INVENTARIO COPIA
+                refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
+                refs_copia_norm = [to_num_str(r) for r in refs_copia]
+                
+                # Crear mapa de REFERENCIA -> COSTO desde el archivo fuente
+                costo_map = dict(zip(
+                    df_src["__REFERENCIA__"].apply(to_num_str),
+                    df_src["__COSTO__"]
+                ))
+                
+                # Cruzar y llenar COSTO PROMEDIO
+                costos = []
+                matched = 0
+                
+                for ref in refs_copia_norm:
+                    if ref and ref in costo_map:
+                        costo_val = costo_map[ref]
+                        
+                        # Validar que sea un valor numérico válido
+                        if pd.notna(costo_val):
+                            try:
+                                costos.append(float(costo_val))
+                                matched += 1
+                            except:
+                                costos.append("")
+                        else:
+                            costos.append("")
+                    else:
+                        costos.append("")
+                
+                # Escribir los valores de costo
+                write_range_as_array(ws_inv_copia, start_data_row, col_costo_promedio, costos)
+                
+                log(f"✅ COSTO PROMEDIO actualizado:")
+                log(f"   - Total procesado: {len(costos)}")
+                log(f"   - Valores encontrados: {matched}")
+                log(f"   - Sin valor: {len(costos) - matched}")
+                
+                # Aplicar formato numérico de contabilidad (opcional)
+                try:
+                    rng = ws_inv_copia.Range(
+                        ws_inv_copia.Cells(start_data_row, col_costo_promedio),
+                        ws_inv_copia.Cells(last_row, col_costo_promedio)
+                    )
+                    # Formato contabilidad sin decimales, con separador de miles (punto)
+                    rng.NumberFormat = "_($* #.##0_);_($* (#.##0);_($* \"-\"_);_(@_)"
+                    log(f"   - Formato de contabilidad aplicado (sin decimales, con separador de miles)")
+                except Exception as e:
+                    log(f"   ⚠ No se pudo aplicar formato: {e}")
+
+                    
+            else:
+                log("  ⚠ No hay datos de COSTO en el archivo fuente (columna __COSTO__)")
+                
+    except Exception as e:
+        log(f"❌ ERROR al actualizar COSTO PROMEDIO: {e}")
+        import traceback
+        log(traceback.format_exc())
 
     # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
