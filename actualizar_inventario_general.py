@@ -2342,12 +2342,75 @@ def main():
                 refs_orig = all_data[ref_idx_orig]
                 refs_orig_normalized = [to_num_str(r) for r in refs_orig]
                 
+                # OPTIMIZADO: Solo leer texto de CLASIFICACION (donde están los #N/D)
+                text_data = {}
+                clasificacion_idx = None
+                
+                for col_idx in col_indices:
+                    if col_idx == ref_idx_orig:
+                        continue
+                    colname = cols_to_read[col_idx]
+                    
+                    # Solo procesar CLASIFICACION para detectar #N/D
+                    if _norm(colname) == _norm("CLASIFICACION"):
+                        clasificacion_idx = col_idx
+                        log(f"Detectando errores #N/D en columna {colname}...")
+                        
+                        try:
+                            # Leer como array 2D (más rápido que iterar)
+                            rng = ws_inv_orig.Range(
+                                ws_inv_orig.Cells(hr_orig + 1, col_idx),
+                                ws_inv_orig.Cells(max_rows, col_idx)
+                            )
+                            
+                            # Obtener valores como array
+                            arr = rng.Value
+                            if arr is None:
+                                text_values = [None] * (max_rows - hr_orig)
+                            elif isinstance(arr, (list, tuple)):
+                                text_values = []
+                                for row in arr:
+                                    if isinstance(row, (list, tuple)):
+                                        val = row[0] if row else None
+                                    else:
+                                        val = row
+                                    
+                                    # Verificar si es un error de Excel (número negativo específico)
+                                    # En COM, #N/D se representa como -2146826246
+                                    if val == -2146826246 or (isinstance(val, str) and val.startswith("#")):
+                                        text_values.append("#N/D")
+                                    elif isinstance(val, int) and val < 0 and val > -2147000000:
+                                        # Otros errores de Excel
+                                        text_values.append(f"#{val}")
+                                    else:
+                                        text_values.append(None)
+                            else:
+                                text_values = [None]
+                            
+                            text_data[colname] = text_values
+                            errores_detectados = sum(1 for v in text_values if v is not None)
+                            if errores_detectados > 0:
+                                log(f"  ✓ {errores_detectados} errores #N/D detectados en {colname}")
+                            
+                        except Exception as e:
+                            log(f"  ⚠ Error al leer texto de {colname}: {e}")
+                            text_data[colname] = [None] * (max_rows - hr_orig)
+                
                 maps = {}
+                maps_text = {}
+                
                 for col_idx in col_indices:
                     if col_idx == ref_idx_orig:
                         continue
                     colname = cols_to_read[col_idx]
                     maps[colname] = dict(zip(refs_orig_normalized, all_data[col_idx]))
+                    
+                    # Crear mapa de textos con errores solo para CLASIFICACION
+                    if colname in text_data:
+                        maps_text[colname] = {}
+                        for idx, ref in enumerate(refs_orig_normalized):
+                            if idx < len(text_data[colname]) and text_data[colname][idx]:
+                                maps_text[colname][ref] = text_data[colname][idx]
                 
                 log("Leyendo referencias de INVENTARIO COPIA...")
                 refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
@@ -2361,18 +2424,49 @@ def main():
                     
                     values_to_write = []
                     matched = 0
+                    errores_preservados = 0
+                    
                     for ref in refs_copia_normalized:
                         if ref and ref in maps[colname]:
-                            val = maps[colname][ref]
-                            values_to_write.append(val if val not in (None, "", "None") else "")
-                            if val not in (None, "", "None"):
+                            # Verificar si hay un error de Excel (#N/D) en esta columna
+                            if colname in maps_text and ref in maps_text[colname]:
+                                texto_error = maps_text[colname][ref]
+                                values_to_write.append(texto_error)
                                 matched += 1
+                                errores_preservados += 1
+                            else:
+                                val = maps[colname][ref]
+                                values_to_write.append(val if val not in (None, "", "None") else "")
+                                if val not in (None, "", "None"):
+                                    matched += 1
                         else:
                             values_to_write.append("")
                     
                     write_range_as_array(ws_inv_copia, start_data_row, tgt_idx, values_to_write)
+                    
+                    if errores_preservados > 0:
+                        log(f"  {colname}: {matched} valores ({errores_preservados} errores #N/D preservados)")
+                    else:
+                        log(f"  {colname}: {matched} valores copiados")
                 
                 log(f"Columnas traídas exitosamente desde INVENTARIO ORIGINAL")
+                
+                # Forzar formato de texto solo en CLASIFICACION con #N/D
+                try:
+                    if "CLASIFICACION" in maps_text and maps_text["CLASIFICACION"]:
+                        tgt_idx = hdrn_copia.get(_norm("CLASIFICACION"))
+                        if tgt_idx:
+                            log("Aplicando formato de texto a celdas con #N/D...")
+                            for idx, ref in enumerate(refs_copia_normalized):
+                                if ref in maps_text["CLASIFICACION"]:
+                                    fila = start_data_row + idx
+                                    cell = ws_inv_copia.Cells(fila, tgt_idx)
+                                    cell.NumberFormat = "@"
+                                    cell.Value = maps_text["CLASIFICACION"][ref]
+                            log(f"  ✓ Formato aplicado a {len(maps_text['CLASIFICACION'])} celdas")
+                            
+                except Exception as e:
+                    log(f"  ⚠ Error al forzar formato de texto: {e}")
                 
                 try:
                     inv_bodega_idx = hdrn_copia.get(_norm("INV BODEGA GERENCIA"))
@@ -2382,7 +2476,6 @@ def main():
                             ws_inv_copia.Cells(last_row, inv_bodega_idx)
                         )
                         rng.HorizontalAlignment = -4108  # xlCenter
- 
                     else:
                         log("  ⚠ Columna INV BODEGA GERENCIA no encontrada")
                 except Exception as e:
@@ -2392,6 +2485,7 @@ def main():
         log(f"⚠ Error al traer columnas desde original: {e}")
         import traceback
         log(traceback.format_exc())
+
 
     # AGREGAR SUBTOTALES FINALES 
     log("Agregando subtotales finales...")
@@ -2438,10 +2532,7 @@ def main():
         BASE_PATH
     )
 
-    # SOLUCIÓN PARA REQUERIMIENTO 18
-    # Agregar este código DESPUÉS de la línea 741 (después de arrastrar fórmulas)
-
-    # LLENAR COSTO PROMEDIO ==========
+    # LLENAR COSTO PROMEDIO 
     log("Actualizando COSTO PROMEDIO después de calcular existencias...")
     try:
         col_costo_promedio = hdrn_copia.get(_norm("COSTO PROMEDIO"))
