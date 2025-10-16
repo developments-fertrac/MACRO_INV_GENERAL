@@ -2532,6 +2532,7 @@ def main():
         BASE_PATH
     )
 
+
     # LLENAR COSTO PROMEDIO 
     log("Actualizando COSTO PROMEDIO después de calcular existencias...")
     try:
@@ -2546,18 +2547,32 @@ def main():
                 refs_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
                 refs_copia_norm = [to_num_str(r) for r in refs_copia]
                 
+                # Leer EXISTENCIAS actuales para aplicar la regla
+                existencias_actuales = read_range_as_array(ws_inv_copia, start_data_row, last_row, col_exist)
+                
                 # Crear mapa de REFERENCIA -> COSTO desde el archivo fuente
                 costo_map = dict(zip(
                     df_src["__REFERENCIA__"].apply(to_num_str),
                     df_src["__COSTO__"]
                 ))
                 
-                # Cruzar y llenar COSTO PROMEDIO
+                # Cruzar y llenar COSTO PROMEDIO con regla: si existencia = 0, entonces costo = 0
                 costos = []
                 matched = 0
+                costos_cero_por_existencia = 0
                 
-                for ref in refs_copia_norm:
-                    if ref and ref in costo_map:
+                for i, ref in enumerate(refs_copia_norm):
+                    # Obtener existencia para esta fila
+                    try:
+                        exist_val = float(existencias_actuales[i]) if existencias_actuales[i] not in (None, "", "None") else 0.0
+                    except:
+                        exist_val = 0.0
+                    
+                    # REGLA: Si existencia es 0, costo es 0
+                    if exist_val == 0:
+                        costos.append(0)
+                        costos_cero_por_existencia += 1
+                    elif ref and ref in costo_map:
                         costo_val = costo_map[ref]
                         
                         # Validar que sea un valor numérico válido
