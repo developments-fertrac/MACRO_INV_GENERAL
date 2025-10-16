@@ -92,16 +92,49 @@ def exist_col_title_for_today() -> str:
     return f"EXISTENCIA {month_abbr_es(today)} {today.day:02d}"
 
 def to_num_str(x):
-    """Convierte a referencia numérica segura (string sin .0)."""
+    """Convierte a referencia numérica segura (string sin .0), manejando separadores de miles."""
     if pd.isna(x): return ""
-    s = str(x).strip()
-    with contextlib.suppress(Exception):
-        f = float(s.replace(",",""))
+    
+    # Si ya es string, procesar
+    if isinstance(x, str):
+        s = x.strip()
+        if not s:
+            return ""
+        
+        # Si contiene letras, paréntesis o barras, NO es una referencia numérica pura
+        # Mantenerlo como está
+        if any(c.isalpha() or c in '()/' for c in s):
+            return s
+        
+        # Si solo contiene dígitos, puntos, comas o guiones, es potencialmente numérico
+        # Eliminar separadores de miles (punto y coma)
+        s_clean = s.replace(".", "").replace(",", "")
+        
+        # Intentar convertir a número
+        try:
+            f = float(s_clean)
+            if abs(f - int(f)) < 1e-9:
+                return str(int(f))
+            return str(f)
+        except:
+            # Si falla la conversión, devolver original
+            return s
+    
+    # Si es numérico (int, float), convertir
+    try:
+        # Convertir a string primero
+        s = str(x).strip()
+        
+        # Eliminar separadores de miles que puedan venir del formato
+        s = s.replace(",", "")
+        
+        f = float(s)
         if abs(f - int(f)) < 1e-9:
             return str(int(f))
         return str(f)
-    return s
-
+    except:
+        return str(x).strip()
+    
 # ==== ARCHIVOS / LECTURA ====
 def _strip_dol_tmp(name: str) -> str:
     base = Path(name).stem.replace("~$", "")
@@ -269,7 +302,52 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
             raise KeyError(f"{p.name}: no encuentro columna de Referencia. Encabezados: {list(df.columns)}")
 
         df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
+        
+        # 🔹 DIAGNÓSTICO: Mostrar muestra de referencias ANTES de normalizar
+        log(f"   📋 Muestra de referencias ANTES de normalizar (primeras 10):")
+        for i, val in enumerate(df[ref_col].head(10)):
+            log(f"      [{i+1}] Tipo: {type(val).__name__}, Valor: '{val}'")
+        
+        # Buscar específicamente las problemáticas
+        refs_problematicas = df[df[ref_col].astype(str).str.contains(r'95\.?276|500\.?845', regex=True, na=False)]
+        if len(refs_problematicas) > 0:
+            log(f"   🔍 Referencias problemáticas encontradas en archivo ERP:")
+            for idx_row, row in refs_problematicas.iterrows():
+                val_original = row[ref_col]
+                log(f"      Original: '{val_original}' (tipo: {type(val_original).__name__})")
+        
+        # 🔹 NORMALIZACIÓN CRÍTICA: Aplicar to_num_str a cada valor
         df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)
+        
+        # 🔹 VERIFICACIÓN: Mostrar muestra DESPUÉS de normalizar
+        log(f"   ✅ Referencias DESPUÉS de normalizar (primeras 10):")
+        for i, val in enumerate(df["__REFERENCIA__"].head(10)):
+            log(f"      [{i+1}] '{val}'")
+        
+        # Verificar las problemáticas normalizadas
+        for ref_buscar in ["95276", "500845"]:
+            if ref_buscar in df["__REFERENCIA__"].values:
+                log(f"      ✅ Referencia '{ref_buscar}' encontrada después de normalizar")
+            else:
+                log(f"      ❌ Referencia '{ref_buscar}' NO encontrada después de normalizar")
+                # Buscar similares
+                similares = df[df["__REFERENCIA__"].str.contains(ref_buscar, na=False)]["__REFERENCIA__"].unique()
+                if len(similares) > 0:
+                    log(f"         Similares: {list(similares)}")
+
+        # Verificar duplicados después de normalización
+        duplicados = df["__REFERENCIA__"].duplicated().sum()
+        if duplicados > 0:
+            log(f"   ⚠ ADVERTENCIA: {duplicados} referencias duplicadas después de normalizar")
+        
+        # Verificar que no hay vacíos o puntos/comas residuales
+        problematic = df["__REFERENCIA__"][
+            (df["__REFERENCIA__"].str.contains(r'[.,]', regex=True, na=False)) |
+            (df["__REFERENCIA__"] == "")
+        ]
+        if len(problematic) > 0:
+            log(f"   ⚠ ADVERTENCIA: {len(problematic)} referencias con separadores o vacías")
+            log(f"      Ejemplos: {list(problematic.head(5))}")
 
         nom_col     = idx.get("nombre") or "Nombre"
         marca_col   = next((real for kn, real in idx.items()
@@ -287,10 +365,16 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
         if linea_col    in df.columns: rename[linea_col]    = "__LINEA_SYS__"
         if sublinea_col in df.columns: rename[sublinea_col] = "__SUBLINEA_SYS__"
         if costo_col    in df.columns: rename[costo_col]    = "__COSTO__"
-        return df.rename(columns=rename)
+        
+        df_final = df.rename(columns=rename)
+        
+        log(f"   📊 Total referencias normalizadas: {len(df_final)}")
+        return df_final
+        
     except FileNotFoundError:
         pass
 
+    # [Resto del código de fallback a PLANTILLA sin cambios]
     p_pl = base_dir / FN_INV_PLANTILLA
     if p_pl.exists():
         p = p_pl
@@ -365,8 +449,16 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     if not cant: raise KeyError(f"{p.name}: no encuentro 'Cantidad'. Encabezados: {list(df.columns)}")
 
     out = pd.DataFrame()
+    # 🔹 NORMALIZACIÓN: Aplicar to_num_str
     out["__REF_INT__"] = df[refc].apply(to_num_str)
     out["__CANT__"]    = pd.to_numeric(df[cant], errors="coerce").fillna(0.0)
+    
+    # 🔹 VERIFICACIÓN: Buscar referencias problemáticas
+    for ref_buscar in ["95276", "500845"]:
+        if ref_buscar in out["__REF_INT__"].values:
+            cantidad = out[out["__REF_INT__"] == ref_buscar]["__CANT__"].iloc[0]
+            log(f"   ✓ Ref '{ref_buscar}' en {prefix}: Cantidad = {cantidad}")
+    
     return out
 
 def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
