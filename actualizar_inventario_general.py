@@ -3066,6 +3066,67 @@ def main():
         log(f"  ❌ ERROR al llenar UND REM CONSIGNACION: {e}")
         import traceback
         log(traceback.format_exc())
+
+
+    # 17.5) APLICAR BORDES A INV LISTA PRECIOS
+    log("Aplicando bordes a INV LISTA PRECIOS...")
+    try:
+        # Buscar la hoja INV LISTA PRECIOS
+        ws_lp = None
+        target_norm = _norm(SHEET_INV_LISTA)
+        
+        for i in range(1, wb.Worksheets.Count + 1):
+            sheet_name = wb.Worksheets(i).Name
+            if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                ws_lp = wb.Worksheets(i)
+                log(f"  Hoja encontrada: '{sheet_name}'")
+                break
+        
+        if ws_lp is None:
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                    ws_lp = wb.Worksheets(i)
+                    log(f"  Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                    break
+        
+        if ws_lp:
+            # Obtener encabezados
+            hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
+            
+            # Buscar columna de referencia para determinar última fila con datos
+            ref_col_lp = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
+            
+            if ref_col_lp:
+                # Determinar última fila con datos
+                last_row_lp = ws_last_row(ws_lp, ref_col_lp, hr_lp)
+                
+                # Ajustar por pivots si existen
+                pivot_top_lp = ws_first_pivot_row(ws_lp)
+                if pivot_top_lp and pivot_top_lp > hr_lp:
+                    last_row_lp = min(last_row_lp, pivot_top_lp - 1)
+                
+                # Determinar rango de columnas
+                used_range_lp = ws_lp.UsedRange
+                first_col_lp = used_range_lp.Column
+                last_col_lp = first_col_lp + used_range_lp.Columns.Count - 1
+                
+                log(f"  Aplicando bordes: filas {hr_lp} a {last_row_lp}, columnas {first_col_lp} a {last_col_lp}")
+                
+                # Aplicar bordes a todo el rango
+                ws_apply_borders_to_range(ws_lp, hr_lp, last_row_lp, first_col_lp, last_col_lp)
+                
+                log(f"✅ Bordes aplicados exitosamente a INV LISTA PRECIOS")
+            else:
+                log("  ⚠ No se pudo determinar columna de referencia para aplicar bordes")
+        else:
+            log("  ⚠ No se encontró la hoja INV LISTA PRECIOS para aplicar bordes")
+            
+    except Exception as e:
+        log(f"  ❌ ERROR al aplicar bordes a INV LISTA PRECIOS: {e}")
+        import traceback
+        log(traceback.format_exc())
+
     
     # 18) GUARDADO COMO ARCHIVO NUEVO 
     log("Preparando guardado del archivo...")
@@ -3131,6 +3192,7 @@ def main():
         log(f"⚠ Error al aplicar ordenamiento: {e}")
         import traceback
         log(traceback.format_exc())
+
     # Eliminar hoja INVENTARIO y renombrar INVENTARIO COPIA
     log("RENOMBRANDO HOJAS: Eliminando INVENTARIO y renombrando INVENTARIO COPIA...")
     try:
@@ -3188,7 +3250,7 @@ def main():
 
     #Actualizar tablas dinámicas en RESUMEN LINEA y Hoja2
 
-    log("REQUERIMIENTO 26: Actualizando tablas dinámicas...")
+    log("Actualizando tablas dinámicas...")
     try:
         hojas_para_actualizar = ["RESUMEN LINEA", "Hoja2"]
         tablas_actualizadas = 0
@@ -3247,17 +3309,102 @@ def main():
         
         if tablas_actualizadas > 0:
             log(f" {tablas_actualizadas} tabla(s) dinámica(s) actualizada(s) exitosamente")
-            
-            # Guardar cambios
-            log(" Guardando cambios...")
-            wb.Save()
-            log("  ✅ Cambios guardados")
         else:
             log("⚠ No se actualizaron tablas dinámicas")
         
-        
     except Exception as e:
         log(f"❌ ERROR al actualizar tablas dinámicas: {e}")
+        import traceback
+        log(traceback.format_exc())
+        
+    # Establecer zoom al 80% en TODAS las hojas
+    log("Estableciendo zoom al 80% en todas las hojas...")
+    try:
+        hojas_procesadas = 0
+        
+        for i in range(1, wb.Worksheets.Count + 1):
+            try:
+                ws = wb.Worksheets(i)
+                sheet_name = ws.Name
+                
+                # Activar la hoja
+                ws.Activate()
+                
+                # Establecer zoom
+                excel.ActiveWindow.Zoom = 80
+                hojas_procesadas += 1
+                
+            except Exception as e:
+                log(f"  ⚠ Error en hoja {i}: {e}")
+        
+        log(f"✅ Zoom al 80% establecido en {hojas_procesadas} hoja(s)")
+        
+    # NUEVO: Centrar columna EXISTENCIA en hoja INVENTARIO
+        log("Centrando columna EXISTENCIA...")
+        try:
+            # Buscar la hoja INVENTARIO
+            ws_inv_final = None
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name = wb.Worksheets(i).Name
+                if _norm(sheet_name) == _norm(SHEET_INV_ORIG):
+                    ws_inv_final = wb.Worksheets(i)
+                    break
+            
+            if ws_inv_final:
+                # CORRECCIÓN: Usar la fila correcta de encabezados (fila 2 en el archivo)
+                hdr_final, hdrn_final = ws_headers(ws_inv_final, HEADER_ROW_INV)
+                
+                # Buscar columna EXISTENCIA usando el diccionario ORIGINAL
+                exist_col_final = None
+                for name, col in hdr_final.items():
+                    name_upper = str(name).upper()
+                    if name_upper.startswith("EXISTENCIA"):
+                        exist_col_final = col
+                        log(f"  Columna encontrada: '{name}' (índice {col})")
+                        break
+                
+                if exist_col_final:
+                    # Centrar toda la columna EXISTENCIA
+                    ws_inv_final.Columns(exist_col_final).HorizontalAlignment = -4108  # xlCenter
+                    log(f"✅ Columna EXISTENCIA centrada (columna {exist_col_final})")
+                else:
+                    log("  ⚠ Columna EXISTENCIA no encontrada para centrar")
+                    log(f"  Encabezados encontrados: {list(hdr_final.keys())[:15]}")
+            else:
+                log(f"  ⚠ No se encontró la hoja '{SHEET_INV_ORIG}' para centrar EXISTENCIA")
+                
+        except Exception as e:
+            log(f"  ⚠ Error al centrar columna EXISTENCIA: {e}")
+            import traceback
+            log(traceback.format_exc())
+        
+        # Activar la hoja INVENTARIO al final
+        log("Activando hoja INVENTARIO como hoja predeterminada...")
+        try:
+            ws_inventario_final = None
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name = wb.Worksheets(i).Name
+                if _norm(sheet_name) == _norm(SHEET_INV_ORIG):
+                    ws_inventario_final = wb.Worksheets(i)
+                    break
+            
+            if ws_inventario_final:
+                ws_inventario_final.Activate()
+                # Asegurar que la celda A1 esté seleccionada
+                ws_inventario_final.Range("A1").Select()
+                log(f"✅ Hoja '{SHEET_INV_ORIG}' activada")
+            else:
+                log(f"  ⚠ No se encontró la hoja '{SHEET_INV_ORIG}'")
+        except Exception as e:
+            log(f"  ⚠ Error al activar hoja INVENTARIO: {e}")
+        
+        # GUARDAR después de establecer el zoom y activar la hoja
+        log("Guardando cambios con zoom aplicado y hoja INVENTARIO activa...")
+        wb.Save()
+        log("✅ Cambios guardados exitosamente")
+        
+    except Exception as e:
+        log(f"❌ ERROR al establecer zoom: {e}")
         import traceback
         log(traceback.format_exc())
 

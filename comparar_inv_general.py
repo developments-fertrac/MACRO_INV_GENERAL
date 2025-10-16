@@ -210,10 +210,19 @@ def norm_for_compare(v):
     # aplana si llega una Serie (pasa cuando aún hay columnas repetidas en origen)
     if isinstance(v, pd.Series):
         v = v.iloc[0] if not v.empty else ""
+    
+    # Normalizar valores None y NaN a cadena vacía
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return ""
+    
+    # Normalizar texto
     if isinstance(v, str):
-        return v.strip()
+        v_clean = v.strip()
+        # Tratar errores de Excel como valores vacíos para que sean iguales entre sí
+        if v_clean.upper() in {"#N/D", "#N/A", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#NULL!", "#¡NULO!"}:
+            return ""
+        return v_clean
+    
     return v
 
 def comparar_en_una_hoja(path_manual: Path, path_auto: Path, out_path: Path,
