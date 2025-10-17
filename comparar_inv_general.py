@@ -328,6 +328,9 @@ def comparar_en_una_hoja(path_manual: Path, path_auto: Path, out_path: Path,
 
 
 def main():
+    # Obtener la carpeta donde está el script
+    script_dir = Path(__file__).parent.resolve()
+    
     # raíz oculta y diálogos siempre al frente
     root = tk.Tk()
     root.withdraw()
@@ -337,6 +340,7 @@ def main():
     # 1) MANUAL
     path_manual = filedialog.askopenfilename(
         title="Selecciona el INVENTARIO MANUAL",
+        initialdir=script_dir,
         filetypes=[("Excel / CSV", "*.xlsx;*.xlsm;*.xls;*.csv"), ("Todos", "*.*")],
         parent=root
     )
@@ -350,6 +354,7 @@ def main():
     # 2) AUTO
     path_auto = filedialog.askopenfilename(
         title="Selecciona el INVENTARIO ACTUALIZADO (código)",
+        initialdir=script_dir,
         filetypes=[("Excel / CSV", "*.xlsx;*.xlsm;*.xls;*.csv"), ("Todos", "*.*")],
         parent=root
     )

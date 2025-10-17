@@ -303,51 +303,16 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
 
         df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
         
-        # 🔹 DIAGNÓSTICO: Mostrar muestra de referencias ANTES de normalizar
-        log(f"   📋 Muestra de referencias ANTES de normalizar (primeras 10):")
-        for i, val in enumerate(df[ref_col].head(10)):
-            log(f"      [{i+1}] Tipo: {type(val).__name__}, Valor: '{val}'")
         
         # Buscar específicamente las problemáticas
         refs_problematicas = df[df[ref_col].astype(str).str.contains(r'95\.?276|500\.?845', regex=True, na=False)]
         if len(refs_problematicas) > 0:
-            log(f"   🔍 Referencias problemáticas encontradas en archivo ERP:")
             for idx_row, row in refs_problematicas.iterrows():
                 val_original = row[ref_col]
-                log(f"      Original: '{val_original}' (tipo: {type(val_original).__name__})")
         
         # 🔹 NORMALIZACIÓN CRÍTICA: Aplicar to_num_str a cada valor
-        df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)
-        
-        # 🔹 VERIFICACIÓN: Mostrar muestra DESPUÉS de normalizar
-        log(f"   ✅ Referencias DESPUÉS de normalizar (primeras 10):")
-        for i, val in enumerate(df["__REFERENCIA__"].head(10)):
-            log(f"      [{i+1}] '{val}'")
-        
-        # Verificar las problemáticas normalizadas
-        for ref_buscar in ["95276", "500845"]:
-            if ref_buscar in df["__REFERENCIA__"].values:
-                log(f"      ✅ Referencia '{ref_buscar}' encontrada después de normalizar")
-            else:
-                log(f"      ❌ Referencia '{ref_buscar}' NO encontrada después de normalizar")
-                # Buscar similares
-                similares = df[df["__REFERENCIA__"].str.contains(ref_buscar, na=False)]["__REFERENCIA__"].unique()
-                if len(similares) > 0:
-                    log(f"         Similares: {list(similares)}")
-
-        # Verificar duplicados después de normalización
-        duplicados = df["__REFERENCIA__"].duplicated().sum()
-        if duplicados > 0:
-            log(f"   ⚠ ADVERTENCIA: {duplicados} referencias duplicadas después de normalizar")
-        
-        # Verificar que no hay vacíos o puntos/comas residuales
-        problematic = df["__REFERENCIA__"][
-            (df["__REFERENCIA__"].str.contains(r'[.,]', regex=True, na=False)) |
-            (df["__REFERENCIA__"] == "")
-        ]
-        if len(problematic) > 0:
-            log(f"   ⚠ ADVERTENCIA: {len(problematic)} referencias con separadores o vacías")
-            log(f"      Ejemplos: {list(problematic.head(5))}")
+        df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)    
+       
 
         nom_col     = idx.get("nombre") or "Nombre"
         marca_col   = next((real for kn, real in idx.items()
@@ -368,7 +333,7 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
         
         df_final = df.rename(columns=rename)
         
-        log(f"   📊 Total referencias normalizadas: {len(df_final)}")
+
         return df_final
         
     except FileNotFoundError:
@@ -457,7 +422,6 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     for ref_buscar in ["95276", "500845"]:
         if ref_buscar in out["__REF_INT__"].values:
             cantidad = out[out["__REF_INT__"] == ref_buscar]["__CANT__"].iloc[0]
-            log(f"   ✓ Ref '{ref_buscar}' en {prefix}: Cantidad = {cantidad}")
     
     return out
 
@@ -1099,13 +1063,6 @@ def eliminar_registros_linea_copia_indeterminada(wsinvcopia, startdatarow: int, 
         
         # Eliminar filas
         if filas_a_eliminar:
-            log(f"Eliminando {len(filas_a_eliminar)} registros con LINEA COPIA indeterminada...")
-            
-            # Mostrar algunos ejemplos
-            for idx, ref, linea in filas_a_eliminar[:5]:
-                log(f"    - Ref: {ref}, LINEA COPIA: '{linea}'")
-            if len(filas_a_eliminar) > 5:
-                log(f"    ... y {len(filas_a_eliminar) - 5} más")
             
             # Eliminar en orden inverso para no afectar índices
             for idx, ref, linea in sorted(filas_a_eliminar, reverse=True):
@@ -1748,11 +1705,9 @@ def aplicar_autofiltros_y_ordenar(ws, header_row: int, last_row: int, hdrn: dict
             log(f"Datos ordenados por TOTAL INV (MAYOR A MENOR)")
             
             # Verificar el ordenamiento leyendo las primeras filas
-            log("  Verificando ordenamiento (primeras 5 filas):")
             for row in range(header_row + 1, min(header_row + 6, last_row + 1)):
                 try:
                     valor = ws.Cells(row, total_inv_col).Value
-                    log(f"    Fila {row}: {valor}")
                 except:
                     pass
                     
@@ -2482,7 +2437,7 @@ def main():
                             text_data[colname] = text_values
                             errores_detectados = sum(1 for v in text_values if v is not None)
                             if errores_detectados > 0:
-                                log(f"  ✓ {errores_detectados} errores #N/D detectados en {colname}")
+                                log(f"{errores_detectados} errores #N/D detectados en {colname}")
                             
                         except Exception as e:
                             log(f"  ⚠ Error al leer texto de {colname}: {e}")
@@ -2555,7 +2510,7 @@ def main():
                                     cell = ws_inv_copia.Cells(fila, tgt_idx)
                                     cell.NumberFormat = "@"
                                     cell.Value = maps_text["CLASIFICACION"][ref]
-                            log(f"  ✓ Formato aplicado a {len(maps_text['CLASIFICACION'])} celdas")
+                            log(f"Formato aplicado a {len(maps_text['CLASIFICACION'])} celdas")
                             
                 except Exception as e:
                     log(f"  ⚠ Error al forzar formato de texto: {e}")
@@ -2682,11 +2637,8 @@ def main():
                 # Escribir los valores de costo
                 write_range_as_array(ws_inv_copia, start_data_row, col_costo_promedio, costos)
                 
-                log(f"✅ COSTO PROMEDIO actualizado:")
-                log(f"   - Total procesado: {len(costos)}")
-                log(f"   - Valores encontrados: {matched}")
-                log(f"   - Sin valor: {len(costos) - matched}")
-                
+                log(f"COSTO PROMEDIO actualizado:")
+
                 # Aplicar formato numérico de contabilidad (opcional)
                 try:
                     rng = ws_inv_copia.Range(
@@ -3208,7 +3160,6 @@ def main():
                 # Aplicar bordes a todo el rango
                 ws_apply_borders_to_range(ws_lp, hr_lp, last_row_lp, first_col_lp, last_col_lp)
                 
-                log(f"✅ Bordes aplicados exitosamente a INV LISTA PRECIOS")
             else:
                 log("  ⚠ No se pudo determinar columna de referencia para aplicar bordes")
         else:
@@ -3258,8 +3209,7 @@ def main():
     else:
         wb.SaveAs(str(out_path), FileFormat=51)
 
-    log(f"✅ Archivo guardado: {out_path}")
-
+  
     # Aplicar ordenamiento DESPUÉS de guardar
     log("Aplicando autofiltros y ordenamiento por TOTAL INV...")
     try:
@@ -3269,16 +3219,14 @@ def main():
         aplicar_autofiltros_y_ordenar(ws_inv_copia, header_row_used, last_row, hdrn_copia)
         
         # Restaurar cálculo automático AHORA
-        log("Restaurando cálculo automático...")
         try:
             excel.Calculation = -4105  
         except Exception as e:
             log(f"Aviso al restaurar cálculo: {e}")
         
         # GUARDAR DE NUEVO con el ordenamiento aplicado
-        log(" Guardando archivo con ordenamiento...")
         wb.Save()
-        log(" Ordenamiento guardado exitosamente")
+
         
     except Exception as e:
         log(f"⚠ Error al aplicar ordenamiento: {e}")
@@ -3427,10 +3375,8 @@ def main():
                 hojas_procesadas += 1
                 
             except Exception as e:
-                log(f"  ⚠ Error en hoja {i}: {e}")
-        
-        log(f"✅ Zoom al 80% establecido en {hojas_procesadas} hoja(s)")
-        
+                log(f"  ⚠ Error en hoja {i}: {e}")        
+       
     # NUEVO: Centrar columna EXISTENCIA en hoja INVENTARIO
         log("Centrando columna EXISTENCIA...")
         try:
@@ -3458,7 +3404,7 @@ def main():
                 if exist_col_final:
                     # Centrar toda la columna EXISTENCIA
                     ws_inv_final.Columns(exist_col_final).HorizontalAlignment = -4108  # xlCenter
-                    log(f"✅ Columna EXISTENCIA centrada (columna {exist_col_final})")
+
                 else:
                     log("  ⚠ Columna EXISTENCIA no encontrada para centrar")
                     log(f"  Encabezados encontrados: {list(hdr_final.keys())[:15]}")
@@ -3484,7 +3430,7 @@ def main():
                 ws_inventario_final.Activate()
                 # Asegurar que la celda A1 esté seleccionada
                 ws_inventario_final.Range("A1").Select()
-                log(f"✅ Hoja '{SHEET_INV_ORIG}' activada")
+
             else:
                 log(f"  ⚠ No se encontró la hoja '{SHEET_INV_ORIG}'")
         except Exception as e:
