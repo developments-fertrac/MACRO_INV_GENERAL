@@ -293,7 +293,7 @@ def comparar_en_una_hoja(path_manual: Path, path_auto: Path, out_path: Path,
                 try:
                     fm = float(str(vm).replace(",", ""))
                     fa = float(str(va).replace(",", ""))
-                    if abs(fm - fa) < 1e-9:
+                    if abs(fm - fa) < 1e-6: 
                         iguales = True
                 except Exception:
                     pass
