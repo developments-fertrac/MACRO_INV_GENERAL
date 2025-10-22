@@ -3233,6 +3233,135 @@ def main():
         import traceback
         log(traceback.format_exc())
 
+    # ORDENAR INV LISTA PRECIOS SEGÚN ORDEN FINAL DE INVENTARIO COPIA
+    log("Ordenando INV LISTA PRECIOS según orden FINAL de INVENTARIO COPIA (después de ordenar por TOTAL INV)...")
+    try:
+        # Buscar la hoja INV LISTA PRECIOS
+        ws_lp = None
+        target_norm = _norm(SHEET_INV_LISTA)
+        
+        for i in range(1, wb.Worksheets.Count + 1):
+            sheet_name = wb.Worksheets(i).Name
+            if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                ws_lp = wb.Worksheets(i)
+                log(f"  Hoja INV LISTA PRECIOS encontrada: '{sheet_name}'")
+                break
+        
+        if ws_lp is None:
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                    ws_lp = wb.Worksheets(i)
+                    log(f"  Hoja INV LISTA PRECIOS encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                    break
+        
+        if ws_lp:
+            # Obtener encabezados de INV LISTA PRECIOS
+            hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
+            
+            # Buscar columna REFERENCIA FERTRAC en INV LISTA PRECIOS
+            ref_fertrac_idx_lp = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
+            
+            if ref_fertrac_idx_lp:
+                # IMPORTANTE: Leer referencias de INVENTARIO COPIA DESPUÉS de que ya fue ordenado por TOTAL INV
+                referencias_orden_maestro = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
+                referencias_orden_maestro = [str(r).strip() if r is not None else "" for r in referencias_orden_maestro]
+                
+                # Crear diccionario con el orden deseado (posición ACTUAL en INVENTARIO COPIA después de ordenar)
+                orden_dict = {}
+                for idx, ref in enumerate(referencias_orden_maestro):
+                    if ref and ref not in ("", "None", "nan"):
+                        orden_dict[str(ref).strip()] = idx
+                
+                log(f"  Orden maestro creado con {len(orden_dict)} referencias (basado en orden FINAL de INVENTARIO COPIA)")
+                
+                # Determinar última fila con datos en INV LISTA PRECIOS
+                last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx_lp, hr_lp)
+                
+                # Ajustar por pivots si existen
+                pivot_top_lp = ws_first_pivot_row(ws_lp)
+                if pivot_top_lp and pivot_top_lp > hr_lp:
+                    last_row_lp = min(last_row_lp, pivot_top_lp - 1)
+                
+                log(f"  Rango de datos: fila {hr_lp + 1} a {last_row_lp}")
+                
+                # Leer referencias actuales de INV LISTA PRECIOS
+                referencias_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx_lp)
+                
+                # Verificar si ya está ordenado
+                referencias_lp_limpio = [str(r).strip() if r is not None else "" for r in referencias_lp]
+                
+                # Comparar orden actual vs orden deseado
+                necesita_ordenar = False
+                for i, ref in enumerate(referencias_lp_limpio):
+                    if ref in orden_dict:
+                        if orden_dict[ref] != i:
+                            necesita_ordenar = True
+                            break
+                
+                if not necesita_ordenar:
+                    log(f"  La hoja ya está ordenada correctamente - no se requiere acción")
+                else:
+                    log(f"  La hoja requiere ordenamiento - aplicando...")
+                    
+                    # Determinar rango completo de columnas
+                    used_range_lp = ws_lp.UsedRange
+                    first_col_lp = used_range_lp.Column
+                    last_col_lp = first_col_lp + used_range_lp.Columns.Count - 1
+                    num_cols = last_col_lp - first_col_lp + 1
+                    
+                    # ✅ OPTIMIZACIÓN: Leer TODO el rango de datos de una sola vez
+                    rng_data = ws_lp.Range(
+                        ws_lp.Cells(hr_lp + 1, first_col_lp),
+                        ws_lp.Cells(last_row_lp, last_col_lp)
+                    )
+                    datos_completos = rng_data.Value
+                    
+                    # Convertir a lista de listas si es necesario
+                    if datos_completos is None:
+                        log("  ⚠ No hay datos para ordenar")
+                    else:
+                        # Si es una sola fila, datos_completos es una tupla, convertir a lista de listas
+                        if not isinstance(datos_completos[0], (tuple, list)):
+                            datos_completos = [datos_completos]
+                        
+                        log(f"  Datos leídos: {len(datos_completos)} filas x {len(datos_completos[0]) if datos_completos else 0} columnas")
+                        
+                        # Crear lista de tuplas (orden_deseado, índice_fila, datos_fila)
+                        filas_con_orden = []
+                        for i, fila_data in enumerate(datos_completos):
+                            ref = referencias_lp_limpio[i]
+                            if ref in orden_dict:
+                                orden_deseado = orden_dict[ref]
+                            else:
+                                orden_deseado = 999999  # Al final
+                            filas_con_orden.append((orden_deseado, list(fila_data)))
+                        
+                        # Ordenar por el orden deseado
+                        filas_con_orden.sort(key=lambda x: x[0])
+                        
+                        # Extraer solo los datos ordenados
+                        datos_ordenados = [fila for orden, fila in filas_con_orden]
+                        
+                        log(f"  Escribiendo {len(datos_ordenados)} filas ordenadas...")
+                        
+                        # ✅ OPTIMIZACIÓN: Escribir TODO de una sola vez
+                        rng_data.Value = datos_ordenados
+                        
+                        log(f"  ✓ Hoja INV LISTA PRECIOS ordenada según orden FINAL de INVENTARIO COPIA")
+                
+            else:
+                log("  ⚠ No se encontró columna REFERENCIA FERTRAC en INV LISTA PRECIOS")
+        else:
+            log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
+            
+    except Exception as e:
+        log(f"  ❌ ERROR al ordenar INV LISTA PRECIOS: {e}")
+        import traceback
+        log(traceback.format_exc())
+
+
+
     # Eliminar hoja INVENTARIO y renombrar INVENTARIO COPIA
     log("RENOMBRANDO HOJAS: Eliminando INVENTARIO y renombrando INVENTARIO COPIA...")
     try:
