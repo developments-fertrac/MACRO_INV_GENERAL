@@ -18,7 +18,7 @@ SEARCH_HEADER_MAXROW = 10
 COLUMNAS_A_COMPARAR = None    # p.ej.: ["NOMBRE ODOO","Marca sistema","COSTO PROMEDIO"]; None = todas comunes
 CAMPOS_IGNORAR = {"Unnamed: 0"}
 
-PASSWORDS_TRY = ["Compras2025"]  # agrega más si usas otras
+PASSWORDS_TRY = ["Compras2025","Compras2026"]  # agrega más si usas otras
 ALLOW_COM_CONVERSION = True      # usa Excel COM para .xls / casos raros
 
 VERBOSE = True
@@ -210,10 +210,19 @@ def norm_for_compare(v):
     # aplana si llega una Serie (pasa cuando aún hay columnas repetidas en origen)
     if isinstance(v, pd.Series):
         v = v.iloc[0] if not v.empty else ""
+    
+    # Normalizar valores None y NaN a cadena vacía
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return ""
+    
+    # Normalizar texto
     if isinstance(v, str):
-        return v.strip()
+        v_clean = v.strip()
+        # Tratar errores de Excel como valores vacíos para que sean iguales entre sí
+        if v_clean.upper() in {"#N/D", "#N/A", "#DIV/0!", "#VALUE!", "#REF!", "#NAME?", "#NUM!", "#NULL!", "#¡NULO!"}:
+            return ""
+        return v_clean
+    
     return v
 
 def comparar_en_una_hoja(path_manual: Path, path_auto: Path, out_path: Path,
@@ -226,24 +235,57 @@ def comparar_en_una_hoja(path_manual: Path, path_auto: Path, out_path: Path,
     key = "__REFERENCIA__"
     cols_m = set(df_m.columns) - {key}
     cols_a = set(df_a.columns) - {key}
+    
+    # MODIFICACIÓN: Buscar columnas que empiecen con "EXISTENCIA"
+    def find_existencia_column(columns):
+        """Encuentra la columna que empiece con 'EXISTENCIA'"""
+        for col in columns:
+            if str(col).upper().startswith("EXISTENCIA"):
+                return col
+        return None
+    
+    col_existencia_m = find_existencia_column(cols_m)
+    col_existencia_a = find_existencia_column(cols_a)
+    
+    if col_existencia_m:
+        log(f"✓ Columna EXISTENCIA detectada en MANUAL: '{col_existencia_m}'")
+    if col_existencia_a:
+        log(f"✓ Columna EXISTENCIA detectada en AUTO: '{col_existencia_a}'")
+    
     if columnas_objetivo:
         comunes = [c for c in columnas_objetivo if (c in cols_m and c in cols_a)]
     else:
         comunes = sorted(list(cols_m.intersection(cols_a)))
+    
+    # AGREGAR columnas EXISTENCIA si existen en ambos archivos
+    # Aunque tengan nombres diferentes, las comparamos manualmente
+    if col_existencia_m and col_existencia_a:
+        # Si las columnas tienen el mismo nombre, ya están en 'comunes'
+        if col_existencia_m not in comunes:
+            # Si tienen nombres diferentes, las agregamos manualmente
+            comunes.append(col_existencia_m)
+            log(f"[INFO] Agregando comparación de EXISTENCIA: '{col_existencia_m}' vs '{col_existencia_a}'")
 
     # asegurar índice sin duplicados
     dm = df_m.drop_duplicates(key, keep="last").set_index(key, drop=False)
     da = df_a.drop_duplicates(key, keep="last").set_index(key, drop=False)
     refs_inter = sorted(set(dm.index).intersection(set(da.index)))
 
-    log(f"Comparando {len(refs_inter)} referencias comunes…")
+    log(f"Comparando {len(refs_inter)} referencias comunes en {len(comunes)} columnas…")
+    log(f"Columnas: {comunes}")
+    
     diffs = []
     for ref in refs_inter:
         row_m = dm.loc[ref]
         row_a = da.loc[ref]
         for col in comunes:
-            vm = norm_for_compare(row_m.get(col, ""))
-            va = norm_for_compare(row_a.get(col, ""))
+            # Manejar el caso especial de EXISTENCIA con nombres diferentes
+            if col == col_existencia_m and col_existencia_m != col_existencia_a:
+                vm = norm_for_compare(row_m.get(col_existencia_m, ""))
+                va = norm_for_compare(row_a.get(col_existencia_a, ""))
+            else:
+                vm = norm_for_compare(row_m.get(col, ""))
+                va = norm_for_compare(row_a.get(col, ""))
 
             iguales = (vm == va)
             if not iguales:
@@ -251,7 +293,7 @@ def comparar_en_una_hoja(path_manual: Path, path_auto: Path, out_path: Path,
                 try:
                     fm = float(str(vm).replace(",", ""))
                     fa = float(str(va).replace(",", ""))
-                    if abs(fm - fa) < 1e-9:
+                    if abs(fm - fa) < 1e-6: 
                         iguales = True
                 except Exception:
                     pass
@@ -284,7 +326,11 @@ def comparar_en_una_hoja(path_manual: Path, path_auto: Path, out_path: Path,
             pass
     log("✅ Listo.")
 
+
 def main():
+    # Obtener la carpeta donde está el script
+    script_dir = Path(__file__).parent.resolve()
+    
     # raíz oculta y diálogos siempre al frente
     root = tk.Tk()
     root.withdraw()
@@ -294,6 +340,7 @@ def main():
     # 1) MANUAL
     path_manual = filedialog.askopenfilename(
         title="Selecciona el INVENTARIO MANUAL",
+        initialdir=script_dir,
         filetypes=[("Excel / CSV", "*.xlsx;*.xlsm;*.xls;*.csv"), ("Todos", "*.*")],
         parent=root
     )
@@ -307,6 +354,7 @@ def main():
     # 2) AUTO
     path_auto = filedialog.askopenfilename(
         title="Selecciona el INVENTARIO ACTUALIZADO (código)",
+        initialdir=script_dir,
         filetypes=[("Excel / CSV", "*.xlsx;*.xlsm;*.xls;*.csv"), ("Todos", "*.*")],
         parent=root
     )
