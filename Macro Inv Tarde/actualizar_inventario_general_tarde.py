@@ -25,13 +25,43 @@ PASSWORDS_TRY = ["Compras2025", "Compras2026"]
 OUTPUT_BASENAME = "2025 INVENTARIO GENERAL ACTUALIZADO EXIST-COSTO"
 APPLY_PASSWORD_TO_OUTPUT = True  # Si deseas proteger el archivo de salida
 
+def buscar_hoja_por_patron(workbook, patron, ignorar_dolares=True):
+    """
+    Busca una hoja en el workbook que coincida con el patrón dado.
+
+    """
+    for sheet_name in workbook.sheetnames:
+        nombre_limpio = sheet_name
+        if ignorar_dolares:
+            # Remover todos los $ del inicio
+            nombre_limpio = re.sub(r'^\$+', '', sheet_name).strip()
+        
+        if patron in nombre_limpio:
+            return sheet_name
+    return None
+
+def buscar_archivo_por_patron(directorio, patron, ignorar_dolares=True):
+    """
+    Busca un archivo en el directorio que coincida con el patrón dado.
+    """
+    dir_path = Path(directorio)
+    for archivo in dir_path.glob("*.xlsx"):
+        nombre_limpio = archivo.stem  # nombre sin extensión
+        if ignorar_dolares:
+            # Remover todos los $ del inicio
+            nombre_limpio = re.sub(r'^\$+', '', nombre_limpio).strip()
+        
+        if patron in nombre_limpio:
+            return archivo
+    return None
+
 # Prefijos de archivos
 PFX_VAL_GENERAL      = "VALORIZADO GENERAL"
 PFX_VAL_FALT_IMPO    = "VALORIZADO FALTANTES IMPO"
 PFX_VAL_FALT         = "VALORIZADO FALTANTES"
 PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
 
-FN_INV_PLANTILLA = "$2025 INVENTARIO GENERAL.xlsx"
+PATRON_INV_FILE = "2025 INVENTARIO GENERAL"
 SHEET_INV = "INVENTARIO"
 HEADER_ROW_INV = 2
 HEADER_ROW_VAL = 9
@@ -440,12 +470,12 @@ def main():
     log(f"  ✓ {len(costo_map)} referencias con costo promedio ({costos_positivos} > 0)")
 
     # 4) Abrir archivo de inventario
-    log(f"\n📄 3. Abriendo archivo: {FN_INV_PLANTILLA}")
-    p_inv = BASE_PATH / FN_INV_PLANTILLA
+    log(f"\n📄 3. Abriendo archivo: {PATRON_INV_FILE}")
+    p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
     if not p_inv.exists():
         raise FileNotFoundError(f"No encontré el archivo: {p_inv}")
     
-    excel, wb, saveinfo = excel_open(p_inv, password=PASS_INV)
+    excel, wb, saveinfo = excel_open(p_inv, password=PASSWORDS_TRY)
 
     try:
         # 5) Buscar hoja INVENTARIO
