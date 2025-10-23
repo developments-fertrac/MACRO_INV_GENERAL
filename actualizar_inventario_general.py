@@ -2024,6 +2024,34 @@ def main():
     p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
     log(f"Archivo encontrado: {p_inv.name}")
     log(f"Abriendo libro Excel: {p_inv}")
+   # ===== APERTURA DE MATRIZ USD PARA EVITAR SOLICITUD DE CONTRASEÑA =====
+    log("ABRIENDO MATRIZ USD ")
+    
+    matriz_excel = None
+    matriz_wb = None
+    matriz_info = None
+    matriz_tmp_path = None
+    
+    try:
+        # Buscar archivo MATRIZ USD
+        log(f"Buscando archivo: {PFX_MATRIZ_USD}")
+        matriz_path = find_by_prefix(BASE_PATH, PFX_MATRIZ_USD)
+        log(f"  → Encontrado: {matriz_path.name}")
+        
+        # Abrir con excel_open (maneja desencriptación automática)
+        log("  → Abriendo archivo...")
+        matriz_excel, matriz_wb, matriz_info = excel_open(matriz_path, password=PASS_INV)
+        matriz_tmp_path = matriz_info.get("tmp_path")
+        
+        log("  ✓ MATRIZ USD abierto exitosamente")
+        log("")
+        
+    except Exception as e:
+        log("")
+        log("  ⚠ ADVERTENCIA: No se pudo abrir MATRIZ USD")
+        log(f"  Motivo: {e}")
+        log("  → Continuando proceso (puede solicitar contraseña)")
+        log("")
     excel, wb, saveinfo = excel_open(p_inv, password=PASS_INV)
 
     # 3) NORMALIZAR nombre de hoja INVENTARIO
@@ -3710,6 +3738,28 @@ def main():
         log(f"❌ ERROR al establecer zoom: {e}")
         import traceback
         log(traceback.format_exc())
+
+    # ===== CERRAR MATRIZ USD =====
+    if matriz_wb and matriz_excel:
+        try:
+            log("")
+            log("Cerrando MATRIZ USD...")
+            matriz_wb.Close(SaveChanges=False)
+            matriz_excel.Quit()
+            log("  ✓ MATRIZ USD cerrado")
+            
+            # Limpiar archivo temporal
+            if matriz_tmp_path and os.path.exists(matriz_tmp_path):
+                try:
+                    os.remove(matriz_tmp_path)
+                    log("  ✓ Archivo temporal eliminado")
+                except Exception as e:
+                    log(f"  ⚠ No se pudo eliminar temporal: {e}")
+                    
+        except Exception as e:
+            log(f"  ⚠ Error al cerrar MATRIZ USD: {e}")
+        
+        log("")
 
     # Cerrar Excel
     excel_close(excel, wb, save=False)
