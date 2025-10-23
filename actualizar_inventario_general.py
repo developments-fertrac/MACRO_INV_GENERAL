@@ -11,6 +11,7 @@ import msoffcrypto
 from unidecode import unidecode
 import tempfile
 import warnings
+import openpyxl
 
 # Suprimir advertencias de openpyxl sobre formato condicional
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
@@ -35,15 +36,49 @@ PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
 PFX_MARCAS           = "MARCAS"
 PFX_DISTRIBUCION     = "DISTRIBUCION DE MATRICES"
 PFX_MAYOR_EXISTENCIA = "2025 INVENTARIO MYR EXISTENCIA"
+PFX_MATRIZ_USD = "2025 MATRIZ USD"
 
-# Matriz USD
-PFX_MATRIZ_USD = "$2025 MATRIZ USD"
-SHEET_MATRIZ_2025 = "2025"
+def buscar_hoja_por_patron(workbook, patron, ignorar_dolares=True):
+    """
+    Busca una hoja en el workbook que coincida con el patrón dado.
 
-FN_INV_PLANTILLA = "$2025 INVENTARIO GENERAL.xlsx"
-SHEET_INV_ORIG   = "INVENTARIO"
-SHEET_INV_COPIA  = "INVENTARIO COPIA"
-SHEET_INV_LISTA  = "INV LISTA PRECIOS"
+    """
+    for sheet_name in workbook.sheetnames:
+        nombre_limpio = sheet_name
+        if ignorar_dolares:
+            # Remover todos los $ del inicio
+            nombre_limpio = re.sub(r'^\$+', '', sheet_name).strip()
+        
+        if patron in nombre_limpio:
+            return sheet_name
+    return None
+
+def buscar_archivo_por_patron(directorio, patron, ignorar_dolares=True):
+    """
+    Busca un archivo en el directorio que coincida con el patrón dado.
+    """
+    dir_path = Path(directorio)
+    for archivo in dir_path.glob("*.xlsx"):
+        nombre_limpio = archivo.stem  # nombre sin extensión
+        if ignorar_dolares:
+            # Remover todos los $ del inicio
+            nombre_limpio = re.sub(r'^\$+', '', nombre_limpio).strip()
+        
+        if patron in nombre_limpio:
+            return archivo
+    return None
+
+# ==== CONFIGURACIÓN DINÁMICA ====
+
+# Para MATRIZ USD
+PATRON_MATRIZ_USD = "2025 MATRIZ USD"
+PATRON_SHEET_2025 = "2025"
+
+# Para INVENTARIO GENERAL
+PATRON_INV_FILE = "2025 INVENTARIO GENERAL"
+SHEET_INV_ORIG = "INVENTARIO"
+SHEET_INV_COPIA = "INVENTARIO COPIA"
+SHEET_INV_LISTA = "INV LISTA PRECIOS"
 
 HEADER_ROW_INV         = 2
 HEADER_ROW_INV_LISTA   = 1
@@ -290,7 +325,11 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
     try:
         p = find_by_prefix(base_dir, PFX_INV_ACTUALIZADO)
         log(f"Abriendo inventario actualizado (ERP): {p.name}")
-        df = read_excel_header_at(p, sheet="Sheet 1", header_row_visible=1)
+        
+        # 🔹 AÑADIDO: Manejo de contraseñas
+        src = open_as_excel_source(p, PASSWORDS_TRY)
+        df = read_excel_header_at(src, sheet="Sheet 1", header_row_visible=1)
+        
         idx = {_norm(c): c for c in df.columns}
 
         ref_col = (
@@ -339,22 +378,27 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
     except FileNotFoundError:
         pass
 
-    # [Resto del código de fallback a PLANTILLA sin cambios]
-    p_pl = base_dir / FN_INV_PLANTILLA
-    if p_pl.exists():
-        p = p_pl
-    else:
-        for pref in ["$2025 INVENTARIO GENERAL", "2025 INVENTARIO GENERAL", "INVENTARIO GENERAL"]:
-            try:
-                p = find_by_prefix(base_dir, pref)
-                break
-            except Exception:
-                p = None
-        if p is None:
-            raise FileNotFoundError(
-                f"No encontré ni '{PFX_INV_ACTUALIZADO}' ni una variante de '$2025 INVENTARIO GENERAL' en {base_dir}"
-            )
-
+    # 🔹 Usar búsqueda dinámica (ignora $ al inicio)
+    p = buscar_archivo_por_patron(base_dir, PATRON_INV_FILE)
+    
+    if not p:
+        # Fallback: intentar con el nombre exacto
+        p_pl = base_dir / PATRON_INV_FILE
+        if p_pl.exists():
+            p = p_pl
+        else:
+            # Intentar con diferentes variantes
+            for pref in ["2025 INVENTARIO GENERAL", "INVENTARIO GENERAL"]:
+                try:
+                    p = find_by_prefix(base_dir, pref)
+                    break
+                except Exception:
+                    p = None
+            
+            if p is None:
+                raise FileNotFoundError(
+                    f"No encontré ni '{PFX_INV_ACTUALIZADO}' ni '{PATRON_INV_FILE}' en {base_dir}"
+                )
     log(f"[Fallback] Abriendo plantilla de inventario: {p.name}")
     df = read_excel_header_at(p, sheet=SHEET_INV_ORIG, header_row_visible=HEADER_ROW_INV)
     idx = {_norm(c): c for c in df.columns}
@@ -430,19 +474,31 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
     Carga el archivo MATRIZ USD, hoja 2025.
     """
     try:
-        p = find_by_prefix(base_dir, PFX_MATRIZ_USD)
+        # 🔹 Usar búsqueda dinámica (ignora $ al inicio)
+        p = buscar_archivo_por_patron(base_dir, PATRON_MATRIZ_USD)
+        
+        if not p:
+            log(f"⚠ No se encontró con búsqueda dinámica, intentando método tradicional...")
+            p = find_by_prefix(base_dir, PFX_MATRIZ_USD)
+        
         log(f"Abriendo Matriz USD: {p.name}")
         
         src = open_as_excel_source(p, PASSWORDS_TRY)
         
         xf = pd.ExcelFile(src, engine="openpyxl")
+        
+        # 🔹 Búsqueda dinámica de hoja (ignora $ al inicio)
         sheet_found = None
         for sn in xf.sheet_names:
-            if "2025" in sn or _norm(sn) == "2025":
+            nombre_limpio = re.sub(r'^\$+', '', sn).strip()
+            if PATRON_SHEET_2025 in nombre_limpio or _norm(nombre_limpio) == _norm(PATRON_SHEET_2025):
                 sheet_found = sn
+                log(f"  ✓ Hoja encontrada: '{sn}'")
                 break
+        
         if not sheet_found:
             sheet_found = xf.sheet_names[0]
+            log(f"  ⚠ No se encontró hoja con '2025', usando: '{sheet_found}'")
         
         df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
         
@@ -1964,7 +2020,9 @@ def main():
     exist_map = df_val_gen.set_index("__REF_INT__")["__EXIST_CALC__"]
 
     # 2) Abrir libro PLANTILLA
-    p_inv = BASE_PATH / FN_INV_PLANTILLA
+    log(f"Buscando archivo que coincida con: {PATRON_INV_FILE}")
+    p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
+    log(f"Archivo encontrado: {p_inv.name}")
     log(f"Abriendo libro Excel: {p_inv}")
     excel, wb, saveinfo = excel_open(p_inv, password=PASS_INV)
 
@@ -2740,10 +2798,10 @@ def main():
                         # Fallback: escribir directamente
                         write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
                     
-                    # Aplicar formato numérico pero mantener alineación izquierda
-                    rng.NumberFormat = "0"
+                    # MANTENER formato de texto para preservar valores con "/"
+                    # No cambiar a formato numérico porque convertiría "/" en división
                     rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
-                    log(f"Formato numérico '0' aplicado con alineación izquierda")
+                    log(f"Formato de texto mantenido con alineación izquierda")
                     
                     # Ignorar advertencias de "número almacenado como texto"
                     try:
@@ -2861,8 +2919,86 @@ def main():
                         else:
                             refs_lista_precios.append("")
                             
-                    # Escribir en REFERENCIA LISTA DE PRECIOS
-                    write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                    # APLICAR CORRECCIÓN PARA REFERENCIAS CON "/" en REFERENCIA LISTA DE PRECIOS
+                    has_slash = any("/" in str(v) for v in refs_lista_precios if v not in (None, "", "None"))
+                    
+                    if has_slash:
+                        last_row_ref_lista = hr_lp + len(refs_lista_precios)
+                        
+                        # Establecer formato de TEXTO primero
+                        rng = ws_lp.Range(
+                            ws_lp.Cells(hr_lp + 1, ref_lista_idx),
+                            ws_lp.Cells(last_row_ref_lista, ref_lista_idx)
+                        )
+                        
+                        rng.NumberFormat = "@"  # Formato TEXTO para evitar división
+                        log(f"Formato de texto aplicado en REFERENCIA LISTA DE PRECIOS")
+                        
+                        # Convertir valores apropiadamente
+                        try:
+                            converted_values = []
+                            slash_count = 0
+                            numeric_count = 0
+                            
+                            for v in refs_lista_precios:
+                                if v in (None, "", "None"):
+                                    converted_values.append([""])
+                                elif "/" in str(v):
+                                    # Mantener como TEXTO si tiene "/"
+                                    converted_values.append([str(v)])
+                                    slash_count += 1
+                                elif not str(v).replace(".", "").replace("-", "").isdigit():
+                                    # Mantener como texto si no es numérico
+                                    converted_values.append([str(v)])
+                                else:
+                                    # Convertir a número si es numérico puro
+                                    try:
+                                        converted_values.append([float(v)])
+                                        numeric_count += 1
+                                    except:
+                                        converted_values.append([str(v)])
+                            
+                            rng.Value = converted_values
+                            log(f"Valores escritos en REFERENCIA LISTA DE PRECIOS: {slash_count} con '/', {numeric_count} numéricos")
+                            
+                        except Exception as e:
+                            log(f"     ⚠️  Aviso en conversión: {e}")
+                            # Fallback: escribir directamente
+                            write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                        
+                        # MANTENER formato de texto para preservar valores con "/"
+                        # No cambiar a formato numérico porque convertiría "/" en división
+                        rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
+                        log(f"Formato de texto mantenido con alineación izquierda en REFERENCIA LISTA DE PRECIOS")
+                        
+                        # Ignorar advertencias de "número almacenado como texto"
+                        try:
+                            for i in range(1, 8):
+                                try:
+                                    rng.Errors.Item(i).Ignore = True
+                                except:
+                                    pass
+                            ws_lp.Parent.Application.ErrorCheckingOptions.NumberAsText = False
+                            log(f"Advertencias de Excel desactivadas para REFERENCIA LISTA DE PRECIOS")
+                        except Exception as e:
+                            log(f"   ⚠️  No se pudieron desactivar advertencias: {e}")
+                        
+                        log(f" {len(refs_lista_precios)} referencias copiadas con formato especial")
+                        
+                    else:
+                        # Si NO hay referencias con "/", usar el método normal
+                        log(f"  ℹ️  No se detectaron referencias con '/' en REFERENCIA LISTA DE PRECIOS - usando método estándar")
+                        write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                        
+                        # Aplicar formato numérico
+                        try:
+                            last_row_ref_lista = hr_lp + len(refs_lista_precios)
+                            rng = ws_lp.Range(ws_lp.Cells(hr_lp + 1, ref_lista_idx), 
+                                             ws_lp.Cells(last_row_ref_lista, ref_lista_idx))
+                            rng.NumberFormat = "0"
+                            log(f"Formato numérico '0' aplicado en REFERENCIA LISTA DE PRECIOS")
+                        except Exception as e:
+                            log(f"     ⚠️  No se pudo aplicar formato numérico: {e}")
                     
                     log(f"REFERENCIA LISTA DE PRECIOS actualizada:")
                     log(f" - Total procesado: {len(refs_lista_precios)}")
@@ -3198,7 +3334,7 @@ def main():
     try:
         base_name = OUTPUT_BASENAME
     except NameError:
-        base_name = f"{Path(FN_INV_PLANTILLA).stem} (ACTUALIZADO)"
+        base_name = f"{Path(PATRON_INV_FILE).stem} (ACTUALIZADO)"
     out_name = f"{base_name} {datetime.now():%Y%m%d_%H%M}.xlsx"
     out_path = BASE_PATH / out_name
 
