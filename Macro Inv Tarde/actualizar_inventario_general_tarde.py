@@ -64,6 +64,7 @@ PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
 PATRON_INV_FILE = "2025 INVENTARIO GENERAL"
 SHEET_INV = "INVENTARIO"
 HEADER_ROW_INV = 2
+HEADER_ROW_LP = 1  # Fila de encabezado para INV LISTA PRECIOS
 HEADER_ROW_VAL = 9
 
 # ==== DEPENDENCIAS COM ====
@@ -317,6 +318,35 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     
     return out
 
+def cargar_valorizado_desde_ruta(archivo_path: Path) -> pd.DataFrame:
+    """Lee VALORIZADO desde ruta específica."""
+    log(f"Abriendo: {archivo_path.name}")
+    src = open_as_excel_source(archivo_path, PASSWORDS_TRY)
+
+    if archivo_path.suffix.lower() == ".csv":
+        df_all = pd.read_csv(src, header=None, dtype=str)
+    else:
+        df_all = pd.read_excel(src, sheet_name=0, engine="openpyxl", header=None)
+
+    hdr_row0 = HEADER_ROW_VAL - 1
+    df = df_all.iloc[hdr_row0:].reset_index(drop=True)
+    df.columns = [str(c).strip() for c in df.iloc[0]]
+    df = df.iloc[1:].reset_index(drop=True)
+    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
+
+    idx = {_norm(c): c for c in df.columns}
+    refc = idx.get("referencia interna")
+    cant = idx.get("cantidad")
+
+    if not refc: raise KeyError(f"{archivo_path.name}: no encuentro 'Referencia interna'")
+    if not cant: raise KeyError(f"{archivo_path.name}: no encuentro 'Cantidad'")
+
+    out = pd.DataFrame()
+    out["__REF_INT__"] = df[refc].apply(to_num_str)
+    out["__CANT__"]    = pd.to_numeric(df[cant], errors="coerce").fillna(0.0)
+    
+    return out
+
 # ==== FUNCIONES COM EXCEL ====
 def excel_open(path: Path, password: str | None = None):
     excel = win32.DispatchEx("Excel.Application")
@@ -433,10 +463,30 @@ def main():
 
     # 1) Cargar archivos valorizados
     log("\n📂 1. Cargando archivos valorizados...")
-    df_val_gen = cargar_valorizado(BASE_PATH, PFX_VAL_GENERAL)
-    df_val_impo = cargar_valorizado(BASE_PATH, PFX_VAL_FALT_IMPO)
-    df_val_falt = cargar_valorizado(BASE_PATH, PFX_VAL_FALT)
-    df_val_tob = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN)
+    df_val_gen   = cargar_valorizado(BASE_PATH, PFX_VAL_GENERAL)
+    df_val_impo  = cargar_valorizado(BASE_PATH, PFX_VAL_FALT_IMPO)
+
+    # FIX: Buscar VALORIZADO FALTANTES sin IMPO
+    log("Buscando VALORIZADO FALTANTES (excluyendo IMPO)...")
+    archivo_faltantes = None
+    for f in BASE_PATH.iterdir():
+        if f.is_file() and f.suffix.lower() in ('.xlsx', '.xlsm'):
+            nombre_sin_simbolos = _strip_dol_tmp(f.name)
+            nombre_normalizado = _norm(nombre_sin_simbolos)
+            
+            # Debe ser exactamente "VALORIZADO FALTANTES" (sin IMPO)
+            if nombre_normalizado == _norm("VALORIZADO FALTANTES"):
+                archivo_faltantes = f
+                log(f"  → Encontrado: {f.name}")
+                break
+
+    if archivo_faltantes:
+        df_val_falt = cargar_valorizado_desde_ruta(archivo_faltantes)
+    else:
+        log(f"  ⚠️ No encontrado, usando vacío")
+        df_val_falt = pd.DataFrame(columns=["__REF_INT__", "__CANT__"])
+
+    df_val_tob   = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN)
 
     # 2) Crear mapas de cantidades
     log("\n🔄 2. Procesando datos de valorizados...")
@@ -620,7 +670,7 @@ def main():
             log(f"    - Sin valor: {len(costos) - matched_costo - costos_cero_por_existencia}")
             log(f"    - Valores redondeados a 2 decimales (formato Excel preservado)")
 
-        # 13) ORDENAR INV LISTA PRECIOS según orden de INVENTARIO
+        # 13) ORDENAR INV LISTA PRECIOS SEGÚN EL ORDEN DE INVENTARIO
         log("\n🔄 9. Ordenando INV LISTA PRECIOS según orden de INVENTARIO...")
         try:
             # Buscar la hoja INV LISTA PRECIOS
@@ -634,84 +684,107 @@ def main():
                     break
             
             if ws_lp:
-                # Obtener encabezados de INV LISTA PRECIOS
-                hdr_lp, hdrn_lp = ws_headers(ws_lp, HEADER_ROW_INV)
+                # Obtener encabezados de INV LISTA PRECIOS (fila 1)
+                hdr_lp, hdrn_lp = ws_headers(ws_lp, HEADER_ROW_LP)
                 
                 # Buscar columna REFERENCIA FERTRAC
-                ref_lp_col = hdrn_lp.get(_norm("REFERENCIA FERTRAC")) or hdrn_lp.get(_norm("REFERENCIA"))
+                ref_fertrac_col = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
                 
-                if ref_lp_col:
-                    # Leer referencias de INVENTARIO (hoja maestra)
-                    referencias_orden_maestro = [to_num_str(r) for r in refs_inv_norm]
+                if ref_fertrac_col:
+                    # Determinar última fila con datos
+                    last_row_lp = ws_last_row(ws_lp, ref_fertrac_col, HEADER_ROW_LP)
                     
-                    # Crear diccionario con el orden deseado
-                    orden_dict = {}
-                    for idx, ref in enumerate(referencias_orden_maestro):
-                        if ref and ref not in ("", "None", "nan"):
-                            orden_dict[ref] = idx
+                    # Determinar última columna
+                    used_range = ws_lp.UsedRange
+                    last_col = used_range.Columns.Count
                     
-                    log(f"  ✓ Orden maestro creado con {len(orden_dict)} referencias")
+                    log(f"  ✓ Reordenando desde fila {HEADER_ROW_LP + 1} hasta fila {last_row_lp}")
+                    log(f"  ✓ Usando orden de INVENTARIO ({len(refs_inv_norm)} referencias)")
                     
-                    # Determinar última fila de INV LISTA PRECIOS
-                    last_row_lp = ws_last_row(ws_lp, ref_lp_col, HEADER_ROW_INV)
-                    start_data_lp = HEADER_ROW_INV + 1
+                    # Leer todas las referencias de INV LISTA PRECIOS
+                    start_data_row_lp = HEADER_ROW_LP + 1
+                    refs_lp = read_range_as_array(ws_lp, start_data_row_lp, last_row_lp, ref_fertrac_col)
+                    refs_lp_norm = [to_num_str(r) for r in refs_lp]
                     
-                    log(f"  ✓ Rango de datos: fila {start_data_lp} a {last_row_lp}")
+                    # Leer todas las filas de datos de INV LISTA PRECIOS de una sola vez
+                    log(f"  📖 Leyendo {last_row_lp - HEADER_ROW_LP} filas de INV LISTA PRECIOS...")
                     
-                    # Leer referencias actuales de INV LISTA PRECIOS
-                    referencias_lp = read_range_as_array(ws_lp, start_data_lp, last_row_lp, ref_lp_col)
-                    referencias_lp_limpio = [to_num_str(r) for r in referencias_lp]
+                    # Leer todo el rango de datos de una vez (mucho más rápido)
+                    data_range = ws_lp.Range(
+                        ws_lp.Cells(start_data_row_lp, 1),
+                        ws_lp.Cells(last_row_lp, last_col)
+                    )
+                    data_values = data_range.Value
                     
-                    # Verificar si ya está ordenado
-                    necesita_ordenar = False
-                    for i, ref in enumerate(referencias_lp_limpio):
-                        if ref in orden_dict:
-                            if orden_dict[ref] != i:
-                                necesita_ordenar = True
-                                break
-                    
-                    if not necesita_ordenar:
-                        log(f"  ✓ La hoja ya está ordenada correctamente")
+                    # Convertir a lista de filas
+                    if data_values is None:
+                        filas_lp = []
+                    elif not isinstance(data_values, (list, tuple)):
+                        # Solo una celda
+                        filas_lp = [[data_values]]
+                    elif last_row_lp - start_data_row_lp == 0:
+                        # Una sola fila
+                        filas_lp = [list(data_values) if isinstance(data_values, (list, tuple)) else [data_values]]
                     else:
-                        log(f"  ⚠ Aplicando ordenamiento...")
-                        
-                        # Determinar rango de columnas
-                        used_range_lp = ws_lp.UsedRange
-                        first_col_lp = used_range_lp.Column
-                        last_col_lp = first_col_lp + used_range_lp.Columns.Count - 1
-                        
-                        # Leer TODO el rango de datos
-                        rng_data = ws_lp.Range(
-                            ws_lp.Cells(start_data_lp, first_col_lp),
-                            ws_lp.Cells(last_row_lp, last_col_lp)
-                        )
-                        datos_completos = rng_data.Value
-                        
-                        if datos_completos is not None:
-                            # Si es una sola fila, convertir a lista de listas
-                            if not isinstance(datos_completos[0], (tuple, list)):
-                                datos_completos = [datos_completos]
-                            
-                            log(f"  ✓ Datos leídos: {len(datos_completos)} filas")
-                            
-                            # Crear lista con orden
-                            filas_con_orden = []
-                            for i, fila_data in enumerate(datos_completos):
-                                ref = referencias_lp_limpio[i]
-                                orden_deseado = orden_dict.get(ref, 999999)
-                                filas_con_orden.append((orden_deseado, list(fila_data)))
-                            
-                            # Ordenar
-                            filas_con_orden.sort(key=lambda x: x[0])
-                            datos_ordenados = [fila for orden, fila in filas_con_orden]
-                            
-                            # Escribir de vuelta
-                            rng_data.Value = datos_ordenados
-                            log(f"  ✓ Hoja INV LISTA PRECIOS ordenada exitosamente")
+                        # Múltiples filas
+                        filas_lp = [list(row) if isinstance(row, (list, tuple)) else [row] for row in data_values]
+                    
+                    log(f"  ✅ {len(filas_lp)} filas leídas exitosamente")
+                    
+                    # Crear diccionario: referencia_normalizada -> fila_completa
+                    ref_to_row = {}
+                    for i, ref_norm in enumerate(refs_lp_norm):
+                        if ref_norm:  # Ignorar referencias vacías
+                            ref_to_row[ref_norm] = filas_lp[i]
+                    
+                    log(f"  🗂️ {len(ref_to_row)} referencias únicas encontradas en INV LISTA PRECIOS")
+                    
+                    # Reordenar según el orden de INVENTARIO
+                    filas_ordenadas = []
+                    refs_encontradas = set()
+                    refs_no_encontradas = []
+                    
+                    for ref_inv in refs_inv_norm:
+                        if ref_inv and ref_inv in ref_to_row:
+                            filas_ordenadas.append(ref_to_row[ref_inv])
+                            refs_encontradas.add(ref_inv)
                         else:
-                            log(f"  ⚠ No hay datos para ordenar")
+                            if ref_inv:
+                                refs_no_encontradas.append(ref_inv)
+                    
+                    # Agregar al final las referencias que están en LP pero no en INVENTARIO
+                    refs_extra = []
+                    for ref_lp in refs_lp_norm:
+                        if ref_lp and ref_lp not in refs_encontradas and ref_lp in ref_to_row:
+                            filas_ordenadas.append(ref_to_row[ref_lp])
+                            refs_extra.append(ref_lp)
+                    
+                    log(f"  ✓ Coincidencias: {len(refs_encontradas)}")
+                    log(f"  ⚠ Referencias en INVENTARIO sin precio: {len(refs_no_encontradas)}")
+                    log(f"  ℹ️ Referencias extra en LISTA PRECIOS: {len(refs_extra)}")
+                    
+                    # Escribir las filas ordenadas de vuelta a Excel (optimizado)
+                    log(f"  ✍️ Escribiendo {len(filas_ordenadas)} filas reordenadas...")
+                    
+                    if filas_ordenadas:
+                        # Escribir todo el rango de una vez (mucho más rápido)
+                        write_range = ws_lp.Range(
+                            ws_lp.Cells(start_data_row_lp, 1),
+                            ws_lp.Cells(start_data_row_lp + len(filas_ordenadas) - 1, last_col)
+                        )
+                        
+                        # Convertir filas_ordenadas a formato que Excel espera
+                        if len(filas_ordenadas) == 1:
+                            # Una sola fila - necesita ser tupla
+                            write_range.Value = tuple(filas_ordenadas[0])
+                        else:
+                            # Múltiples filas - necesita ser tupla de tuplas
+                            write_range.Value = tuple(tuple(fila) for fila in filas_ordenadas)
+                    
+                    log(f"  ✅ INV LISTA PRECIOS reordenada según INVENTARIO ({len(filas_ordenadas)} filas)")
                 else:
-                    log(f"  ⚠ No se encontró columna REFERENCIA en INV LISTA PRECIOS")
+                    log(f"  ⚠ No se encontró columna REFERENCIA FERTRAC")
+                    log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
             else:
                 log(f"  ℹ️ No se encontró hoja INV LISTA PRECIOS (esto es normal si no existe)")
                 
