@@ -2418,6 +2418,41 @@ def main():
 
     log(f"Rango de datos actualizado: filas {start_data_row} a {last_row} ({last_row - start_data_row + 1} registros)")
 
+
+    # ELIMINAR FILAS CON "MANO DE OBRA" EN NOMBRE ODOO
+    log("Eliminando filas con 'Mano de obra' en columna NOMBRE ODOO...")
+    try:
+        col_nombre_odoo = hdrn_copia.get(_norm("NOMBRE ODOO"))
+        if col_nombre_odoo:
+            # Leer valores de NOMBRE ODOO
+            filas_a_eliminar = []
+            for row_idx in range(start_data_row, last_row + 1):
+                try:
+                    valor = ws_inv_copia.Cells(row_idx, col_nombre_odoo).Value
+                    if valor and isinstance(valor, str) and "mano de obra" in valor.lower():
+                        filas_a_eliminar.append(row_idx)
+                except Exception:
+                    continue
+            
+            if filas_a_eliminar:
+                log(f"  Encontradas {len(filas_a_eliminar)} filas con 'Mano de obra'")
+                # Eliminar filas de abajo hacia arriba para mantener índices correctos
+                for row_idx in reversed(filas_a_eliminar):
+                    ws_inv_copia.Rows(row_idx).Delete()
+                    log(f"  - Fila {row_idx} eliminada")
+                
+                # Actualizar last_row
+                last_row = last_row - len(filas_a_eliminar)
+                log(f"  ✓ {len(filas_a_eliminar)} filas eliminadas. Nuevo rango: {start_data_row} a {last_row}")
+            else:
+                log("  No se encontraron filas con 'Mano de obra'")
+        else:
+            log("  ⚠ Columna 'NOMBRE ODOO' no encontrada")
+    except Exception as e:
+        log(f"  ⚠ Error al eliminar filas con 'Mano de obra': {e}")
+        import traceback
+        log(traceback.format_exc())
+
     # Actualizar el rango usado en la hoja para asegurar que Excel lo reconozca
     try:
         ws_inv_copia.UsedRange.Calculate()
