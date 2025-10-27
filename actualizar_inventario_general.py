@@ -1829,7 +1829,16 @@ def aplicar_autofiltros_y_ordenar(ws, header_row: int, last_row: int, hdrn: dict
             
             log("  ✓ Datos ordenados por TOTAL INV (MAYOR A MENOR)")
             
-                   
+            # Verificar el ordenamiento leyendo las primeras 5 filas
+            log("  → Verificando orden (primeras 5 filas):")
+            for row in range(header_row + 1, min(header_row + 6, last_row + 1)):
+                try:
+                    valor = ws.Cells(row, total_inv_col).Value
+                    if valor is not None:
+                        log(f"     Fila {row}: {valor:,.2f}" if isinstance(valor, (int, float)) else f"     Fila {row}: {valor}")
+                except Exception:
+                    pass
+                    
         except Exception as e:
             log(f"  ❌ ERROR al ordenar por TOTAL INV: {e}")
             import traceback
@@ -2231,6 +2240,60 @@ def main():
             log(f"Aviso: no se pudo copiar anchos de columna: {e}")
         
         log(f"Hoja '{SHEET_INV_COPIA}' creada exitosamente")
+        
+        
+        # ROMPER VÍNCULOS EXTERNOS: Convertir fórmulas a valores en columnas con enlaces externos
+        log("Rompiendo vínculos externos en INVENTARIO COPIA...")
+        try:
+            # Obtener encabezados de la copia recién creada
+            temp_hr, temp_hdr, temp_hdrn = ws_headers_smart(
+                ws_inv_copia,
+                expected_row=HEADER_ROW_INV,
+                preferred_labels=["REFERENCIA", "NOMBRE LISTA", "NOMBRE MYR"]
+            )
+            
+            # Lista de columnas que suelen tener fórmulas con enlaces externos
+            columnas_a_romper = [
+                "NOMBRE LISTA",      # Tiene fórmulas que apuntan a MATRIZ USD
+                "NOMBRE MYR",        # Puede tener fórmulas relacionadas
+                "REFERENCIA LISTA DE PRECIOS",  # Puede tener vínculos
+                "PRECIO LISTA"       # Puede tener vínculos
+            ]
+            
+            columnas_rotas = 0
+            for col_name in columnas_a_romper:
+                col_idx = temp_hdrn.get(_norm(col_name))
+                if col_idx:
+                    try:
+                        # Seleccionar toda la columna desde el inicio de datos hasta el final usado
+                        used_range = ws_inv_copia.UsedRange
+                        last_row_temp = used_range.Rows.Count
+                        
+                        col_range = ws_inv_copia.Range(
+                            ws_inv_copia.Cells(temp_hr + 1, col_idx),
+                            ws_inv_copia.Cells(last_row_temp, col_idx)
+                        )
+                        
+                        # Convertir fórmulas a valores
+                        # Método: copiar y pegar como valores sobre sí mismo
+                        col_range.Copy()
+                        col_range.PasteSpecial(Paste=-4163)  # xlPasteValues
+                        excel.CutCopyMode = False
+                        
+                        columnas_rotas += 1
+                        log(f"  ✓ Vínculos rotos en columna: {col_name}")
+                        
+                    except Exception as e:
+                        log(f"  ⚠ No se pudo romper vínculos en {col_name}: {e}")
+            
+            if columnas_rotas > 0:
+                log(f"✓ {columnas_rotas} columna(s) convertida(s) a valores (vínculos externos eliminados)")
+            else:
+                log("  ℹ No se encontraron columnas con posibles vínculos externos")
+                
+        except Exception as e:
+            log(f"  ⚠ Error al romper vínculos externos: {e}")
+            # No es crítico, continuar con el proceso
         
     except Exception as e:
         log(f"ERROR al crear copia: {e}")
@@ -2866,6 +2929,10 @@ def main():
         hdrn_copia
     )
     # **AGREGAR AQUÍ: Aplicar autofiltros y ordenar por TOTAL INV**
+    log("")
+    log("="*70)
+    log("APLICANDO ORDENAMIENTO FINAL POR TOTAL INV EN INVENTARIO COPIA")
+    log("="*70)
 
     try:
         # Actualizar last_row después de todas las eliminaciones
