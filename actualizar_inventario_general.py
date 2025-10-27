@@ -11,6 +11,7 @@ import msoffcrypto
 from unidecode import unidecode
 import tempfile
 import warnings
+import openpyxl
 
 # Suprimir advertencias de openpyxl sobre formato condicional
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
@@ -35,15 +36,49 @@ PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
 PFX_MARCAS           = "MARCAS"
 PFX_DISTRIBUCION     = "DISTRIBUCION DE MATRICES"
 PFX_MAYOR_EXISTENCIA = "2025 INVENTARIO MYR EXISTENCIA"
+PFX_MATRIZ_USD = "2025 MATRIZ USD"
 
-# Matriz USD
-PFX_MATRIZ_USD = "$2025 MATRIZ USD"
-SHEET_MATRIZ_2025 = "2025"
+def buscar_hoja_por_patron(workbook, patron, ignorar_dolares=True):
+    """
+    Busca una hoja en el workbook que coincida con el patrón dado.
 
-FN_INV_PLANTILLA = "$2025 INVENTARIO GENERAL.xlsx"
-SHEET_INV_ORIG   = "INVENTARIO"
-SHEET_INV_COPIA  = "INVENTARIO COPIA"
-SHEET_INV_LISTA  = "INV LISTA PRECIOS"
+    """
+    for sheet_name in workbook.sheetnames:
+        nombre_limpio = sheet_name
+        if ignorar_dolares:
+            # Remover todos los $ del inicio
+            nombre_limpio = re.sub(r'^\$+', '', sheet_name).strip()
+        
+        if patron in nombre_limpio:
+            return sheet_name
+    return None
+
+def buscar_archivo_por_patron(directorio, patron, ignorar_dolares=True):
+    """
+    Busca un archivo en el directorio que coincida con el patrón dado.
+    """
+    dir_path = Path(directorio)
+    for archivo in dir_path.glob("*.xlsx"):
+        nombre_limpio = archivo.stem  # nombre sin extensión
+        if ignorar_dolares:
+            # Remover todos los $ del inicio
+            nombre_limpio = re.sub(r'^\$+', '', nombre_limpio).strip()
+        
+        if patron in nombre_limpio:
+            return archivo
+    return None
+
+# ==== CONFIGURACIÓN DINÁMICA ====
+
+# Para MATRIZ USD
+PATRON_MATRIZ_USD = "2025 MATRIZ USD"
+PATRON_SHEET_2025 = "2025"
+
+# Para INVENTARIO GENERAL
+PATRON_INV_FILE = "2025 INVENTARIO GENERAL"
+SHEET_INV_ORIG = "INVENTARIO"
+SHEET_INV_COPIA = "INVENTARIO COPIA"
+SHEET_INV_LISTA = "INV LISTA PRECIOS"
 
 HEADER_ROW_INV         = 2
 HEADER_ROW_INV_LISTA   = 1
@@ -141,23 +176,53 @@ def _strip_dol_tmp(name: str) -> str:
     base = re.sub(r"^\$+", "", base)
     return base
 
-def find_by_prefix(base_dir: Path, prefix: str, exts=(".xlsx",".xlsm",".xls",".csv")) -> Path:
-    """Busca por prefijo normalizado, elige el más reciente."""
+def find_by_prefix(basedir: Path, prefix: str, exts=[".xlsx", ".xlsm", ".xls", ".csv"]) -> Path:
+    """
+    Busca por prefijo normalizado, elige el más reciente.
+    NUEVO: Da prioridad a coincidencias exactas antes que parciales.
+    """
     pref = _norm(prefix)
     cands = []
-    for f in base_dir.iterdir():
-        if not (f.is_file() and f.suffix.lower() in exts):
+    exact_match = None  # NUEVO: almacena coincidencia exacta
+    
+    for f in basedir.iterdir():
+        if not f.is_file() or f.suffix.lower() not in exts:
             continue
+        
         nn = _norm(_strip_dol_tmp(f.name))
+        
+        # NUEVO: Verificar coincidencia exacta primero
+        if nn == pref:
+            exact_match = f
+            log(f"  ✓ Coincidencia EXACTA encontrada: {f.name}")
+            break  # Salir inmediatamente si hay coincidencia exacta
+        
+        # Coincidencias parciales (como antes)
         if nn.startswith(pref) or pref in nn:
-            cands.append(f); continue
+            cands.append(f)
+            continue
+        
+        # Búsqueda por tokens (como antes)
         tokens = pref.split()
         if all(t in nn for t in tokens):
             cands.append(f)
+    
+    # NUEVO: Retornar coincidencia exacta si existe
+    if exact_match:
+        return exact_match
+    
+    # Si no hay coincidencia exacta, usar el algoritmo original
     if not cands:
-        raise FileNotFoundError(f"No encontré archivos que coincidan con '{prefix}' en {base_dir}")
+        raise FileNotFoundError(f"No encontré archivos que coincidan con '{prefix}' en {basedir}")
+    
+    # Ordenar por fecha de modificación más reciente
     cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    
+    # Log para debugging
+    log(f"  → Usando archivo más reciente (sin coincidencia exacta): {cands[0].name}")
+    
     return cands[0]
+
 
 def decrypt_to_stream(xlsx_path: Path, password: str) -> io.BytesIO:
     bio = io.BytesIO()
@@ -290,7 +355,11 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
     try:
         p = find_by_prefix(base_dir, PFX_INV_ACTUALIZADO)
         log(f"Abriendo inventario actualizado (ERP): {p.name}")
-        df = read_excel_header_at(p, sheet="Sheet 1", header_row_visible=1)
+        
+        # 🔹 AÑADIDO: Manejo de contraseñas
+        src = open_as_excel_source(p, PASSWORDS_TRY)
+        df = read_excel_header_at(src, sheet="Sheet 1", header_row_visible=1)
+        
         idx = {_norm(c): c for c in df.columns}
 
         ref_col = (
@@ -339,22 +408,27 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
     except FileNotFoundError:
         pass
 
-    # [Resto del código de fallback a PLANTILLA sin cambios]
-    p_pl = base_dir / FN_INV_PLANTILLA
-    if p_pl.exists():
-        p = p_pl
-    else:
-        for pref in ["$2025 INVENTARIO GENERAL", "2025 INVENTARIO GENERAL", "INVENTARIO GENERAL"]:
-            try:
-                p = find_by_prefix(base_dir, pref)
-                break
-            except Exception:
-                p = None
-        if p is None:
-            raise FileNotFoundError(
-                f"No encontré ni '{PFX_INV_ACTUALIZADO}' ni una variante de '$2025 INVENTARIO GENERAL' en {base_dir}"
-            )
-
+    # 🔹 Usar búsqueda dinámica (ignora $ al inicio)
+    p = buscar_archivo_por_patron(base_dir, PATRON_INV_FILE)
+    
+    if not p:
+        # Fallback: intentar con el nombre exacto
+        p_pl = base_dir / PATRON_INV_FILE
+        if p_pl.exists():
+            p = p_pl
+        else:
+            # Intentar con diferentes variantes
+            for pref in ["2025 INVENTARIO GENERAL", "INVENTARIO GENERAL"]:
+                try:
+                    p = find_by_prefix(base_dir, pref)
+                    break
+                except Exception:
+                    p = None
+            
+            if p is None:
+                raise FileNotFoundError(
+                    f"No encontré ni '{PFX_INV_ACTUALIZADO}' ni '{PATRON_INV_FILE}' en {base_dir}"
+                )
     log(f"[Fallback] Abriendo plantilla de inventario: {p.name}")
     df = read_excel_header_at(p, sheet=SHEET_INV_ORIG, header_row_visible=HEADER_ROW_INV)
     idx = {_norm(c): c for c in df.columns}
@@ -406,9 +480,26 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
 
     idx = {_norm(c): c for c in df.columns}
-    refc = idx.get("referencia interna") or idx.get("referencia") or idx.get("ref") \
-           or next((real for kn, real in idx.items() if "referenc" in kn), None)
-    cant = idx.get("cantidad") or next((real for kn, real in idx.items() if kn.startswith("cant")), None)
+
+    # FORZAR a buscar EXACTAMENTE "Referencia interna"
+    refc = idx.get("referencia interna")
+
+    # Si no encuentra, buscar alternativas PERO mostrar advertencia
+    if not refc:
+        log(f"  ⚠️ ADVERTENCIA: No se encontró columna 'Referencia interna' en {p.name}")
+        log(f"     Columnas disponibles: {list(df.columns)}")
+        refc = idx.get("referencia") or idx.get("ref") \
+            or next((real for kn, real in idx.items() if "referenc" in kn), None)
+        if refc:
+            log(f"     Usando columna alternativa: '{refc}'")
+
+    cant = idx.get("cantidad")
+    if not cant:
+        log(f"  ⚠️ ADVERTENCIA: No se encontró columna 'Cantidad' en {p.name}")
+        log(f"     Columnas disponibles: {list(df.columns)}")
+        cant = next((real for kn, real in idx.items() if kn.startswith("cant")), None)
+        if cant:
+            log(f"     Usando columna alternativa: '{cant}'")
 
     if not refc: raise KeyError(f"{p.name}: no encuentro 'Referencia interna'. Encabezados: {list(df.columns)}")
     if not cant: raise KeyError(f"{p.name}: no encuentro 'Cantidad'. Encabezados: {list(df.columns)}")
@@ -425,24 +516,65 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     
     return out
 
+def cargar_valorizado_desde_ruta(archivo_path: Path) -> pd.DataFrame:
+    """Lee VALORIZADO desde ruta específica."""
+    log(f"Abriendo: {archivo_path.name}")
+    src = open_as_excel_source(archivo_path, PASSWORDS_TRY)
+
+    if archivo_path.suffix.lower() == ".csv":
+        df_all = pd.read_csv(src, header=None, dtype=str)
+    else:
+        df_all = pd.read_excel(src, sheet_name=0, engine="openpyxl", header=None)
+
+    hdr_row0 = HEADER_ROW_VAL - 1
+    df = df_all.iloc[hdr_row0:].reset_index(drop=True)
+    df.columns = [str(c).strip() for c in df.iloc[0]]
+    df = df.iloc[1:].reset_index(drop=True)
+    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
+
+    idx = {_norm(c): c for c in df.columns}
+    refc = idx.get("referencia interna")
+    cant = idx.get("cantidad")
+
+    if not refc: raise KeyError(f"{archivo_path.name}: no encuentro 'Referencia interna'")
+    if not cant: raise KeyError(f"{archivo_path.name}: no encuentro 'Cantidad'")
+
+    out = pd.DataFrame()
+    out["__REF_INT__"] = df[refc].apply(to_num_str)
+    out["__CANT__"]    = pd.to_numeric(df[cant], errors="coerce").fillna(0.0)
+    
+    return out
+
 def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
     """
     Carga el archivo MATRIZ USD, hoja 2025.
     """
     try:
-        p = find_by_prefix(base_dir, PFX_MATRIZ_USD)
+        # 🔹 Usar búsqueda dinámica (ignora $ al inicio)
+        p = buscar_archivo_por_patron(base_dir, PATRON_MATRIZ_USD)
+        
+        if not p:
+            log(f"⚠ No se encontró con búsqueda dinámica, intentando método tradicional...")
+            p = find_by_prefix(base_dir, PFX_MATRIZ_USD)
+        
         log(f"Abriendo Matriz USD: {p.name}")
         
         src = open_as_excel_source(p, PASSWORDS_TRY)
         
         xf = pd.ExcelFile(src, engine="openpyxl")
+        
+        # 🔹 Búsqueda dinámica de hoja (ignora $ al inicio)
         sheet_found = None
         for sn in xf.sheet_names:
-            if "2025" in sn or _norm(sn) == "2025":
+            nombre_limpio = re.sub(r'^\$+', '', sn).strip()
+            if PATRON_SHEET_2025 in nombre_limpio or _norm(nombre_limpio) == _norm(PATRON_SHEET_2025):
                 sheet_found = sn
+                log(f"  ✓ Hoja encontrada: '{sn}'")
                 break
+        
         if not sheet_found:
             sheet_found = xf.sheet_names[0]
+            log(f"  ⚠ No se encontró hoja con '2025', usando: '{sheet_found}'")
         
         df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
         
@@ -1655,14 +1787,14 @@ def aplicar_autofiltros_y_ordenar(ws, header_row: int, last_row: int, hdrn: dict
             log(f"  Columnas disponibles: {list(hdrn.keys())}")
             return
         
-        log(f"Columna TOTAL INV encontrada: índice {total_inv_col}")
+        log(f"  ✓ Columna TOTAL INV encontrada: índice {total_inv_col}")
         
         # Determinar el rango completo para el autofiltro
         used_range = ws.UsedRange
         first_col = used_range.Column
         last_col = first_col + used_range.Columns.Count - 1
         
-        log(f"  Rango de datos: filas {header_row} a {last_row}, columnas {first_col} a {last_col}")
+        log(f"  → Rango de datos: filas {header_row} a {last_row}, columnas {first_col} a {last_col}")
         
         # Crear el rango del encabezado
         header_range = ws.Range(
@@ -1670,56 +1802,54 @@ def aplicar_autofiltros_y_ordenar(ws, header_row: int, last_row: int, hdrn: dict
             ws.Cells(last_row, last_col)
         )
         
-        # Aplicar AutoFilter
+        # Eliminar AutoFilter existente
         try:
-            # Si ya existe un AutoFilter, quitarlo primero
             if ws.AutoFilterMode:
                 ws.AutoFilterMode = False
-                log("  • AutoFilter anterior eliminado")
-            
-            # Aplicar el AutoFilter al rango
-            header_range.AutoFilter()
-            log(f"Autofiltros aplicados desde fila {header_row}")
+                log("  ✓ AutoFilter anterior eliminado")
         except Exception as e:
-            log(f"  ⚠ Error al aplicar autofiltros: {e}")
-            return
+            log(f"  ⚠ Error al eliminar AutoFilter: {e}")
         
+
         # Ordenar por TOTAL INV de MAYOR A MENOR
         try:
-            log(f"  Preparando ordenamiento por columna {total_inv_col} (TOTAL INV)...")
+            log(f"  → Preparando ordenamiento por columna {total_inv_col} (TOTAL INV)...")
             
             # Crear la clave de ordenamiento
             sort_key = ws.Cells(header_row, total_inv_col)
             
-            log(f"  Aplicando Sort: Key1=columna {total_inv_col}, Order1=2 (descendente)...")
-            
             # Aplicar el ordenamiento usando Sort
             header_range.Sort(
                 Key1=sort_key,
-                Order1=2,  
-                Header=1,  
+                Order1=2,         # xlDescending (2 = descendente)
+                Header=1,         # xlYes (1 = tiene encabezado)
                 MatchCase=False,
-                Orientation=1 
+                Orientation=1     # xlTopToBottom
             )
             
-            log(f"Datos ordenados por TOTAL INV (MAYOR A MENOR)")
+            log("  ✓ Datos ordenados por TOTAL INV (MAYOR A MENOR)")
             
-            # Verificar el ordenamiento leyendo las primeras filas
+            # Verificar el ordenamiento leyendo las primeras 5 filas
+            log("  → Verificando orden (primeras 5 filas):")
             for row in range(header_row + 1, min(header_row + 6, last_row + 1)):
                 try:
                     valor = ws.Cells(row, total_inv_col).Value
-                except:
+                    if valor is not None:
+                        log(f"     Fila {row}: {valor:,.2f}" if isinstance(valor, (int, float)) else f"     Fila {row}: {valor}")
+                except Exception:
                     pass
                     
         except Exception as e:
-            log(f"  ⚠ ERROR al ordenar por TOTAL INV: {e}")
+            log(f"  ❌ ERROR al ordenar por TOTAL INV: {e}")
             import traceback
             log(traceback.format_exc())
+            return
         
-        log("Autofiltros y ordenamiento completados")
+        log("✓ Autofiltros y ordenamiento completados exitosamente")
+        log("")
         
     except Exception as e:
-        log(f"  ⚠ ERROR CRÍTICO al aplicar autofiltros y ordenar: {e}")
+        log(f"❌ ERROR CRÍTICO al aplicar autofiltros y ordenar: {e}")
         import traceback
         log(traceback.format_exc())
 
@@ -1906,9 +2036,29 @@ def main():
     # Valorizados
     df_val_gen   = cargar_valorizado(BASE_PATH, PFX_VAL_GENERAL)
     df_val_impo  = cargar_valorizado(BASE_PATH, PFX_VAL_FALT_IMPO)
-    df_val_falt  = cargar_valorizado(BASE_PATH, PFX_VAL_FALT)
-    df_val_tob   = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN)
 
+    # FIX: Buscar VALORIZADO FALTANTES sin IMPO
+    log("Buscando VALORIZADO FALTANTES (excluyendo IMPO)...")
+    archivo_faltantes = None
+    for f in BASE_PATH.iterdir():
+        if f.is_file() and f.suffix.lower() in ('.xlsx', '.xlsm'):
+            nombre_sin_simbolos = _strip_dol_tmp(f.name)
+            nombre_normalizado = _norm(nombre_sin_simbolos)
+            
+            # Debe ser exactamente "VALORIZADO FALTANTES" (sin IMPO)
+            if nombre_normalizado == _norm("VALORIZADO FALTANTES"):
+                archivo_faltantes = f
+                log(f"  → Encontrado: {f.name}")
+                break
+
+    if archivo_faltantes:
+        df_val_falt = cargar_valorizado_desde_ruta(archivo_faltantes)
+    else:
+        log(f"  ⚠️ No encontrado, usando vacío")
+        df_val_falt = pd.DataFrame(columns=["__REF_INT__", "__CANT__"])
+
+    df_val_tob   = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN)
+    
     # Cargar Matriz USD
     df_matriz_usd = cargar_matriz_usd(BASE_PATH)
     matriz_map = df_matriz_usd.set_index("__REF_MATRIZ__")["__DESC_LISTA__"].to_dict() if len(df_matriz_usd) > 0 else {}
@@ -1952,6 +2102,7 @@ def main():
     df_val_gen["__TOB_MATCH__"]  = df_val_gen["__REF_INT__"].isin(val_map_tob.index)
     df_val_gen["__TOB_CANT__"]   = df_val_gen["__REF_INT__"].map(val_map_tob).fillna(0.0)
     df_val_gen["__TOB_DIF__"]    = df_val_gen["__CANT__"] - df_val_gen["__TOB_CANT__"]
+    
 
     # Consolidado EXISTENCIA_CALC
     # FÓRMULA: VALORIZADO GENERAL - FALTANTES IMPO - FALTANTES - TOBERÍN
@@ -1963,10 +2114,83 @@ def main():
     )
     exist_map = df_val_gen.set_index("__REF_INT__")["__EXIST_CALC__"]
 
+
     # 2) Abrir libro PLANTILLA
-    p_inv = BASE_PATH / FN_INV_PLANTILLA
+    log(f"Buscando archivo que coincida con: {PATRON_INV_FILE}")
+    p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
+    log(f"Archivo encontrado: {p_inv.name}")
     log(f"Abriendo libro Excel: {p_inv}")
+    # ===== APERTURA DE ARCHIVO PRINCIPAL =====
+    log(f"Buscando archivo que coincida con: {PATRON_INV_FILE}")
+    p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
+    log(f"Archivo encontrado: {p_inv.name}")
+    log(f"Abriendo libro Excel: {p_inv}")
+
     excel, wb, saveinfo = excel_open(p_inv, password=PASS_INV)
+
+    # ===== ABRIR MATRIZ USD EN LA MISMA INSTANCIA DE EXCEL =====
+    log("")
+    log("ABRIENDO MATRIZ USD en la misma instancia de Excel...")
+
+    matriz_wb = None
+    matriz_tmp_path = None
+
+    try:
+        # Buscar archivo MATRIZ USD
+        log(f"Buscando archivo: {PFX_MATRIZ_USD}")
+        matriz_path = find_by_prefix(BASE_PATH, PFX_MATRIZ_USD)
+        log(f"  → Encontrado: {matriz_path.name}")
+        
+        # Verificar si está encriptado
+        encrypted = is_encrypted_xlsx(matriz_path)
+        
+        if encrypted:
+            log("  → Archivo encriptado - desencriptando...")
+            # Desencriptar a archivo temporal
+            ok = False
+            for pw in PASSWORDS_TRY:
+                try:
+                    bio = decrypt_to_stream(matriz_path, pw)
+                    tmp = save_bytesio_to_temp(bio, Path(matriz_path).stem)
+                    matriz_tmp_path = str(tmp)
+                    
+                    # CAMBIO CRÍTICO: Abrir con UpdateLinks=3 para desactivar vínculos
+                    matriz_wb = excel.Workbooks.Open(
+                        str(tmp),
+                        UpdateLinks=3,  # ← CAMBIO CLAVE: 3 = No actualizar vínculos externos
+                        ReadOnly=True,
+                        IgnoreReadOnlyRecommended=True,
+                        Password=pw,
+                        Notify=False
+                    )
+                    ok = True
+                    log("  ✓ MATRIZ USD abierto (desencriptado) sin actualizar vínculos")
+                    break
+                except Exception as e:
+                    continue
+            
+            if not ok:
+                log("  ⚠ No se pudo desencriptar MATRIZ USD con ninguna contraseña")
+        else:
+            # Abrir directamente si no está encriptado
+            matriz_wb = excel.Workbooks.Open(
+                str(matriz_path),
+                UpdateLinks=3,  # ← CAMBIO CLAVE: 3 = No actualizar vínculos externos
+                ReadOnly=True,
+                IgnoreReadOnlyRecommended=True,
+                Notify=False
+            )
+            log("  ✓ MATRIZ USD abierto sin actualizar vínculos")
+        
+        log("")
+        
+    except Exception as e:
+        log("")
+        log("  ⚠ ADVERTENCIA: No se pudo abrir MATRIZ USD")
+        log(f"  Motivo: {e}")
+        log("  → Puede solicitar contraseña manualmente")
+        log("")
+
 
     # 3) NORMALIZAR nombre de hoja INVENTARIO
     log("Normalizando nombre de hoja INVENTARIO...")
@@ -2541,14 +2765,19 @@ def main():
     except Exception as e:
         log(f"⚠ Error al agregar subtotales finales: {e}")
 
-    # Inmovilizar las dos primeras filas
     try:
-        # Seleccionar la celda A3 (fila 3, columna 1)
+        # PRIMERO: Activar la hoja
+        ws_inv_copia.Activate()
+        
+        # SEGUNDO: Seleccionar la celda A3
         ws_inv_copia.Cells(3, 1).Select()
+        
+        # TERCERO: Aplicar FreezePanes
         excel.ActiveWindow.FreezePanes = True
+        log("✓ Paneles inmovilizados en fila 3")
     except Exception as e:
         log(f"⚠ Error al inmovilizar paneles: {e}")
-
+        
     # Aplicar reglas de marcas propias 
     log("Aplicando reglas de negocio para marcas propias...")
     last_row = aplicar_reglas_marcas_propias(
@@ -2569,6 +2798,27 @@ def main():
         ref_col_idx, 
         hdrn_copia
     )
+    # **AGREGAR AQUÍ: Aplicar autofiltros y ordenar por TOTAL INV**
+    log("")
+    log("="*70)
+    log("APLICANDO ORDENAMIENTO FINAL POR TOTAL INV EN INVENTARIO COPIA")
+    log("="*70)
+
+    try:
+        # Actualizar last_row después de todas las eliminaciones
+        last_row = ws_last_row(ws_inv_copia, ref_col_idx, start_data_row - 1)
+        log(f"Rango final detectado: {last_row - start_data_row + 1} filas")
+        
+        # Aplicar autofiltros y ordenar
+        aplicar_autofiltros_y_ordenar(ws_inv_copia, header_row_used, last_row, hdrn_copia)
+        
+        log("✓ Ordenamiento por TOTAL INV completado")
+        log("")
+        
+    except Exception as e:
+        log(f"❌ ERROR al aplicar ordenamiento: {e}")
+        import traceback
+        log(traceback.format_exc())
     #Procesar existencias negativas y cero
     last_row = procesar_existencias_negativas_y_cero(
         ws_inv_copia,
@@ -2740,10 +2990,10 @@ def main():
                         # Fallback: escribir directamente
                         write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
                     
-                    # Aplicar formato numérico pero mantener alineación izquierda
-                    rng.NumberFormat = "0"
+                    # MANTENER formato de texto para preservar valores con "/"
+                    # No cambiar a formato numérico porque convertiría "/" en división
                     rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
-                    log(f"Formato numérico '0' aplicado con alineación izquierda")
+                    log(f"Formato de texto mantenido con alineación izquierda")
                     
                     # Ignorar advertencias de "número almacenado como texto"
                     try:
@@ -2861,8 +3111,86 @@ def main():
                         else:
                             refs_lista_precios.append("")
                             
-                    # Escribir en REFERENCIA LISTA DE PRECIOS
-                    write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                    # APLICAR CORRECCIÓN PARA REFERENCIAS CON "/" en REFERENCIA LISTA DE PRECIOS
+                    has_slash = any("/" in str(v) for v in refs_lista_precios if v not in (None, "", "None"))
+                    
+                    if has_slash:
+                        last_row_ref_lista = hr_lp + len(refs_lista_precios)
+                        
+                        # Establecer formato de TEXTO primero
+                        rng = ws_lp.Range(
+                            ws_lp.Cells(hr_lp + 1, ref_lista_idx),
+                            ws_lp.Cells(last_row_ref_lista, ref_lista_idx)
+                        )
+                        
+                        rng.NumberFormat = "@"  # Formato TEXTO para evitar división
+                        log(f"Formato de texto aplicado en REFERENCIA LISTA DE PRECIOS")
+                        
+                        # Convertir valores apropiadamente
+                        try:
+                            converted_values = []
+                            slash_count = 0
+                            numeric_count = 0
+                            
+                            for v in refs_lista_precios:
+                                if v in (None, "", "None"):
+                                    converted_values.append([""])
+                                elif "/" in str(v):
+                                    # Mantener como TEXTO si tiene "/"
+                                    converted_values.append([str(v)])
+                                    slash_count += 1
+                                elif not str(v).replace(".", "").replace("-", "").isdigit():
+                                    # Mantener como texto si no es numérico
+                                    converted_values.append([str(v)])
+                                else:
+                                    # Convertir a número si es numérico puro
+                                    try:
+                                        converted_values.append([float(v)])
+                                        numeric_count += 1
+                                    except:
+                                        converted_values.append([str(v)])
+                            
+                            rng.Value = converted_values
+                            log(f"Valores escritos en REFERENCIA LISTA DE PRECIOS: {slash_count} con '/', {numeric_count} numéricos")
+                            
+                        except Exception as e:
+                            log(f"     ⚠️  Aviso en conversión: {e}")
+                            # Fallback: escribir directamente
+                            write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                        
+                        # MANTENER formato de texto para preservar valores con "/"
+                        # No cambiar a formato numérico porque convertiría "/" en división
+                        rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
+                        log(f"Formato de texto mantenido con alineación izquierda en REFERENCIA LISTA DE PRECIOS")
+                        
+                        # Ignorar advertencias de "número almacenado como texto"
+                        try:
+                            for i in range(1, 8):
+                                try:
+                                    rng.Errors.Item(i).Ignore = True
+                                except:
+                                    pass
+                            ws_lp.Parent.Application.ErrorCheckingOptions.NumberAsText = False
+                            log(f"Advertencias de Excel desactivadas para REFERENCIA LISTA DE PRECIOS")
+                        except Exception as e:
+                            log(f"   ⚠️  No se pudieron desactivar advertencias: {e}")
+                        
+                        log(f" {len(refs_lista_precios)} referencias copiadas con formato especial")
+                        
+                    else:
+                        # Si NO hay referencias con "/", usar el método normal
+                        log(f"  ℹ️  No se detectaron referencias con '/' en REFERENCIA LISTA DE PRECIOS - usando método estándar")
+                        write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                        
+                        # Aplicar formato numérico
+                        try:
+                            last_row_ref_lista = hr_lp + len(refs_lista_precios)
+                            rng = ws_lp.Range(ws_lp.Cells(hr_lp + 1, ref_lista_idx), 
+                                             ws_lp.Cells(last_row_ref_lista, ref_lista_idx))
+                            rng.NumberFormat = "0"
+                            log(f"Formato numérico '0' aplicado en REFERENCIA LISTA DE PRECIOS")
+                        except Exception as e:
+                            log(f"     ⚠️  No se pudo aplicar formato numérico: {e}")
                     
                     log(f"REFERENCIA LISTA DE PRECIOS actualizada:")
                     log(f" - Total procesado: {len(refs_lista_precios)}")
@@ -3198,7 +3526,7 @@ def main():
     try:
         base_name = OUTPUT_BASENAME
     except NameError:
-        base_name = f"{Path(FN_INV_PLANTILLA).stem} (ACTUALIZADO)"
+        base_name = f"{Path(PATRON_INV_FILE).stem} (ACTUALIZADO)"
     out_name = f"{base_name} {datetime.now():%Y%m%d_%H%M}.xlsx"
     out_path = BASE_PATH / out_name
 
@@ -3564,6 +3892,54 @@ def main():
                 log(f"  ⚠ No se encontró la hoja '{SHEET_INV_ORIG}'")
         except Exception as e:
             log(f"  ⚠ Error al activar hoja INVENTARIO: {e}")
+           # ===== ACTIVAR FILTROS EN FILA 2 =====
+        log("Activando filtros en fila 2 de INVENTARIO...")
+        try:
+            # Buscar la hoja INVENTARIO
+            ws_inv_final = None
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name = wb.Worksheets(i).Name
+                if _norm(sheet_name) == _norm(SHEET_INV_ORIG):
+                    ws_inv_final = wb.Worksheets(i)
+                    break
+            
+            if ws_inv_final:
+                # Activar la hoja
+                ws_inv_final.Activate()
+                
+                # Obtener el rango usado
+                used_range = ws_inv_final.UsedRange
+                last_col = used_range.Columns.Count
+                
+                # Determinar última fila (considerando pivots)
+                pivot_top = ws_first_pivot_row(ws_inv_final)
+                if pivot_top and pivot_top > HEADER_ROW_INV:
+                    last_row = pivot_top - 1
+                else:
+                    last_row = used_range.Rows.Count
+                
+                # Desactivar filtro si ya existe
+                if ws_inv_final.AutoFilterMode:
+                    ws_inv_final.AutoFilterMode = False
+                
+                # Definir el rango para el filtro (desde fila 2 hasta la última fila)
+                filter_range = ws_inv_final.Range(
+                    ws_inv_final.Cells(HEADER_ROW_INV, 1),
+                    ws_inv_final.Cells(last_row, last_col)
+                )
+                
+                # Activar AutoFilter
+                filter_range.AutoFilter(Field=1)
+                
+                log(f"✅ Filtros activados en fila {HEADER_ROW_INV}")
+                
+            else:
+                log(f"  ⚠️ No se encontró la hoja '{SHEET_INV_ORIG}'")
+                
+        except Exception as e:
+            log(f"  ⚠️ Error al activar filtros: {e}")
+            import traceback
+            log(traceback.format_exc())    
         
         # GUARDAR después de establecer el zoom y activar la hoja
         log("Guardando cambios con zoom aplicado y hoja INVENTARIO activa...")
@@ -3574,6 +3950,25 @@ def main():
         log(f"❌ ERROR al establecer zoom: {e}")
         import traceback
         log(traceback.format_exc())
+
+    # Cerrar MATRIZ USD
+    if matriz_wb:
+        try:
+            log("")
+            log("Cerrando MATRIZ USD...")
+            matriz_wb.Close(SaveChanges=False)
+            log("  ✓ MATRIZ USD cerrado")
+        except Exception as e:
+            log(f"  ⚠ Error al cerrar MATRIZ USD: {e}")
+
+    # Limpiar archivo temporal
+    if matriz_tmp_path and os.path.exists(matriz_tmp_path):
+        try:
+            os.remove(matriz_tmp_path)
+            log("  ✓ Archivo temporal eliminado")
+        except Exception as e:
+            log(f"  ⚠ No se pudo eliminar temporal: {e}")
+
 
     # Cerrar Excel
     excel_close(excel, wb, save=False)
