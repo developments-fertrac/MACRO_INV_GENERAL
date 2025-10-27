@@ -1829,16 +1829,7 @@ def aplicar_autofiltros_y_ordenar(ws, header_row: int, last_row: int, hdrn: dict
             
             log("  ✓ Datos ordenados por TOTAL INV (MAYOR A MENOR)")
             
-            # Verificar el ordenamiento leyendo las primeras 5 filas
-            log("  → Verificando orden (primeras 5 filas):")
-            for row in range(header_row + 1, min(header_row + 6, last_row + 1)):
-                try:
-                    valor = ws.Cells(row, total_inv_col).Value
-                    if valor is not None:
-                        log(f"     Fila {row}: {valor:,.2f}" if isinstance(valor, (int, float)) else f"     Fila {row}: {valor}")
-                except Exception:
-                    pass
-                    
+                   
         except Exception as e:
             log(f"  ❌ ERROR al ordenar por TOTAL INV: {e}")
             import traceback
@@ -2453,6 +2444,47 @@ def main():
         import traceback
         log(traceback.format_exc())
 
+
+    # ELIMINAR FILAS CON REFERENCIA QUE TERMINE EN " NF" (con espacio)
+    log("Eliminando filas con referencias que terminan en ' NF' (espacio + NF)...")
+    try:
+        # ref_col_idx ya está definido anteriormente
+        if ref_col_idx:
+            # Leer valores de REFERENCIA
+            filas_a_eliminar = []
+            for row_idx in range(start_data_row, last_row + 1):
+                try:
+                    valor_ref = ws_inv_copia.Cells(row_idx, ref_col_idx).Value
+                    if valor_ref and isinstance(valor_ref, str):
+                        # Verificar si termina con espacio + "NF"
+                        if valor_ref.endswith(" NF"):
+                            filas_a_eliminar.append(row_idx)
+                except Exception:
+                    continue
+            
+            if filas_a_eliminar:
+                log(f"  Encontradas {len(filas_a_eliminar)} referencias terminadas en ' NF'")
+                # Eliminar filas de abajo hacia arriba para mantener índices correctos
+                eliminadas = 0
+                for row_idx in reversed(filas_a_eliminar):
+                    try:
+                        ws_inv_copia.Rows(row_idx).Delete()
+                        eliminadas += 1
+                    except Exception as e:
+                        log(f"  ⚠ Error al eliminar fila {row_idx}: {e}")
+                
+                # Actualizar last_row
+                last_row = last_row - eliminadas
+                log(f"  ✓ {eliminadas} filas eliminadas. Nuevo rango: {start_data_row} a {last_row}")
+            else:
+                log("  No se encontraron referencias terminadas en ' NF'")
+        else:
+            log("  ⚠ Columna de REFERENCIA no encontrada")
+    except Exception as e:
+        log(f"  ⚠ Error al eliminar referencias con ' NF': {e}")
+        import traceback
+        log(traceback.format_exc())
+
     # Actualizar el rango usado en la hoja para asegurar que Excel lo reconozca
     try:
         ws_inv_copia.UsedRange.Calculate()
@@ -2834,10 +2866,6 @@ def main():
         hdrn_copia
     )
     # **AGREGAR AQUÍ: Aplicar autofiltros y ordenar por TOTAL INV**
-    log("")
-    log("="*70)
-    log("APLICANDO ORDENAMIENTO FINAL POR TOTAL INV EN INVENTARIO COPIA")
-    log("="*70)
 
     try:
         # Actualizar last_row después de todas las eliminaciones
@@ -2855,6 +2883,58 @@ def main():
         import traceback
         log(traceback.format_exc())
     #Procesar existencias negativas y cero
+
+    # PASO FINAL: ELIMINAR FILAS CON LIDER LINEA VACÍO
+    log("")
+    log("="*70)
+    log("PASO FINAL: ELIMINANDO FILAS CON LIDER LINEA VACÍO")
+    log("="*70)
+    try:
+        col_lider_linea = hdrn_copia.get(_norm("LIDER LINEA"))
+        
+        if col_lider_linea:
+            # Actualizar last_row antes de procesar
+            last_row = ws_last_row(ws_inv_copia, ref_col_idx, start_data_row - 1)
+            log(f"Analizando {last_row - start_data_row + 1} filas...")
+            
+            # Leer valores de LIDER LINEA
+            filas_a_eliminar = []
+            for row_idx in range(start_data_row, last_row + 1):
+                try:
+                    valor_lider = ws_inv_copia.Cells(row_idx, col_lider_linea).Value
+                    # Verificar si está vacío (None, "", espacios, etc.)
+                    if not valor_lider or (isinstance(valor_lider, str) and not valor_lider.strip()):
+                        filas_a_eliminar.append(row_idx)
+                except Exception:
+                    continue
+            
+            if filas_a_eliminar:
+                log(f"  Encontradas {len(filas_a_eliminar)} filas con LIDER LINEA vacío")
+                
+                # Eliminar filas de abajo hacia arriba para mantener índices correctos
+                eliminadas = 0
+                for row_idx in reversed(filas_a_eliminar):
+                    try:
+                        ws_inv_copia.Rows(row_idx).Delete()
+                        eliminadas += 1
+                    except Exception as e:
+                        log(f"  ⚠ Error al eliminar fila {row_idx}: {e}")
+                
+                # Actualizar last_row
+                last_row = last_row - eliminadas
+                log(f"  ✓ {eliminadas} filas eliminadas. Nuevo rango: {start_data_row} a {last_row} ({last_row - start_data_row + 1} registros)")
+            else:
+                log("  ℹ No se encontraron filas con LIDER LINEA vacío")
+        else:
+            log("  ⚠ Columna 'LIDER LINEA' no encontrada")
+            
+    except Exception as e:
+        log(f"❌ ERROR al eliminar filas con LIDER LINEA vacío: {e}")
+        import traceback
+        log(traceback.format_exc())
+    
+    log("")
+    
     last_row = procesar_existencias_negativas_y_cero(
         ws_inv_copia,
         start_data_row,
@@ -3722,6 +3802,124 @@ def main():
         log(f"  ❌ ERROR al ordenar INV LISTA PRECIOS: {e}")
         import traceback
         log(traceback.format_exc())
+
+
+    # LIMPIEZA FINAL: Eliminar filas con REFERENCIA FERTRAC vacía en INV LISTA PRECIOS
+    log("")
+    log("="*70)
+    log("LIMPIEZA FINAL: ELIMINANDO FILAS CON REFERENCIA FERTRAC VACÍA")
+    log("="*70)
+    try:
+        # Buscar la hoja INV LISTA PRECIOS
+        ws_lp = None
+        target_norm = _norm(SHEET_INV_LISTA)
+        
+        for i in range(1, wb.Worksheets.Count + 1):
+            sheet_name = wb.Worksheets(i).Name
+            if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                ws_lp = wb.Worksheets(i)
+                log(f"Hoja encontrada: '{sheet_name}'")
+                break
+        
+        if ws_lp is None:
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                    ws_lp = wb.Worksheets(i)
+                    log(f"Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                    break
+        
+        if ws_lp:
+            # Obtener encabezados
+            hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
+            ref_fertrac_idx = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
+            
+            if ref_fertrac_idx:
+                # Determinar última fila REAL con datos en CUALQUIER columna
+                # Usar UsedRange para detectar todas las filas con datos
+                pivot_top_lp = ws_first_pivot_row(ws_lp)
+                
+                try:
+                    # Obtener el rango usado completo
+                    used_range = ws_lp.UsedRange
+                    last_row_used = used_range.Rows.Count
+                    
+                    if pivot_top_lp and pivot_top_lp > hr_lp:
+                        last_row_lp = min(last_row_used, pivot_top_lp - 1)
+                    else:
+                        last_row_lp = last_row_used
+                    
+                    log(f"Rango usado completo: hasta fila {last_row_used}")
+                except Exception as e:
+                    log(f"  ⚠ No se pudo obtener UsedRange: {e}")
+                    # Fallback al método original
+                    if pivot_top_lp and pivot_top_lp > hr_lp:
+                        last_row_lp = pivot_top_lp - 1
+                    else:
+                        last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx, hr_lp)
+                
+                log(f"Analizando filas {hr_lp + 1} a {last_row_lp}...")
+                
+                # Identificar filas con REFERENCIA FERTRAC vacía
+                filas_a_eliminar = []
+                for row_idx in range(hr_lp + 1, last_row_lp + 1):
+                    try:
+                        valor_ref = ws_lp.Cells(row_idx, ref_fertrac_idx).Value
+                        
+                        # Verificar si está vacío de múltiples formas
+                        esta_vacio = False
+                        
+                        if valor_ref is None:
+                            esta_vacio = True
+                        elif isinstance(valor_ref, str):
+                            # String vacío o solo espacios
+                            if not valor_ref.strip():
+                                esta_vacio = True
+                        elif isinstance(valor_ref, (int, float)):
+                            # Si es 0 o NaN, considerar como válido (no eliminar)
+                            esta_vacio = False
+                        else:
+                            # Cualquier otro tipo vacío
+                            try:
+                                if str(valor_ref).strip() in ("", "None", "#N/A", "#REF!", "#VALUE!"):
+                                    esta_vacio = True
+                            except:
+                                pass
+                        
+                        if esta_vacio:
+                            filas_a_eliminar.append(row_idx)
+                            
+                    except Exception as e:
+                        # Si hay error al leer, considerar como posible fila vacía
+                        log(f"  ⚠ Error al leer fila {row_idx}: {e}")
+                        continue
+                
+                if filas_a_eliminar:
+                    log(f"  Encontradas {len(filas_a_eliminar)} filas con REFERENCIA FERTRAC vacía")
+                    
+                    # Eliminar filas de abajo hacia arriba para mantener índices correctos
+                    eliminadas = 0
+                    for row_idx in reversed(filas_a_eliminar):
+                        try:
+                            ws_lp.Rows(row_idx).Delete()
+                            eliminadas += 1
+                        except Exception as e:
+                            log(f"  ⚠ Error al eliminar fila {row_idx}: {e}")
+                    
+                    log(f"  ✓ {eliminadas} filas eliminadas en INV LISTA PRECIOS")
+                else:
+                    log("  ℹ No se encontraron filas con REFERENCIA FERTRAC vacía")
+            else:
+                log("  ⚠ Columna 'REFERENCIA FERTRAC' no encontrada")
+        else:
+            log("  ⚠ Hoja INV LISTA PRECIOS no encontrada")
+            
+    except Exception as e:
+        log(f"❌ ERROR al eliminar filas con REFERENCIA FERTRAC vacía: {e}")
+        import traceback
+        log(traceback.format_exc())
+    
+    log("")
 
 
 
