@@ -2493,7 +2493,6 @@ def main():
                 # Eliminar filas de abajo hacia arriba para mantener índices correctos
                 for row_idx in reversed(filas_a_eliminar):
                     ws_inv_copia.Rows(row_idx).Delete()
-                    log(f"  - Fila {row_idx} eliminada")
                 
                 # Actualizar last_row
                 last_row = last_row - len(filas_a_eliminar)
@@ -2928,34 +2927,10 @@ def main():
         ref_col_idx, 
         hdrn_copia
     )
-    # **AGREGAR AQUÍ: Aplicar autofiltros y ordenar por TOTAL INV**
-    log("")
-    log("="*70)
-    log("APLICANDO ORDENAMIENTO FINAL POR TOTAL INV EN INVENTARIO COPIA")
-    log("="*70)
 
-    try:
-        # Actualizar last_row después de todas las eliminaciones
-        last_row = ws_last_row(ws_inv_copia, ref_col_idx, start_data_row - 1)
-        log(f"Rango final detectado: {last_row - start_data_row + 1} filas")
-        
-        # Aplicar autofiltros y ordenar
-        aplicar_autofiltros_y_ordenar(ws_inv_copia, header_row_used, last_row, hdrn_copia)
-        
-        log("✓ Ordenamiento por TOTAL INV completado")
-        log("")
-        
-    except Exception as e:
-        log(f"❌ ERROR al aplicar ordenamiento: {e}")
-        import traceback
-        log(traceback.format_exc())
-    #Procesar existencias negativas y cero
+    # ELIMINAR FILAS CON LIDER LINEA VACÍO
 
-    # PASO FINAL: ELIMINAR FILAS CON LIDER LINEA VACÍO
-    log("")
-    log("="*70)
-    log("PASO FINAL: ELIMINANDO FILAS CON LIDER LINEA VACÍO")
-    log("="*70)
+    log("ELIMINANDO FILAS CON LIDER LINEA VACÍO")
     try:
         col_lider_linea = hdrn_copia.get(_norm("LIDER LINEA"))
         
