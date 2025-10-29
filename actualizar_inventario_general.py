@@ -1772,6 +1772,7 @@ def _ranges_without_pivots_for_column(col_idx: int, start_row: int, end_row: int
         segments.append((cur, end_row))
     return [(a, b) for (a, b) in segments if b >= a]
 
+
 def aplicar_autofiltros_y_ordenar(ws, header_row: int, last_row: int, hdrn: dict):
     """
     Aplica autofiltros a todos los encabezados y ordena por TOTAL INV de mayor a menor.
@@ -1852,6 +1853,119 @@ def aplicar_autofiltros_y_ordenar(ws, header_row: int, last_row: int, hdrn: dict
         log(f"❌ ERROR CRÍTICO al aplicar autofiltros y ordenar: {e}")
         import traceback
         log(traceback.format_exc())
+
+
+def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_row: int, 
+                                      ref_col_idx: int, hdrn_copia: dict) -> int:
+    """
+    Elimina registros según criterios estandarizados:
+    1. NOMBRE MYR que contenga "Publicidad"
+    2. REFERENCIA con patrón: 2 ceros + 2 números + letras (SIN símbolos como /)
+    3. NOMBRE MYR que contenga "Ajuste de precios"
+    
+    Retorna el nuevo last_row después de las eliminaciones.
+    """
+    try:
+        log("="*60)
+        log("ELIMINANDO REGISTROS SEGÚN CRITERIOS ESTANDARIZADOS")
+        log("="*60)
+        
+        # Buscar columnas necesarias
+        col_nombre_myr = hdrn_copia.get(_norm("NOMBRE MYR"))
+        
+        if not col_nombre_myr:
+            log("  ⚠ Columna NOMBRE MYR no encontrada")
+            return last_row
+        
+        # Leer datos de REFERENCIA y NOMBRE MYR
+        cols_to_read = [ref_col_idx, col_nombre_myr]
+        data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
+        
+        referencias = data[ref_col_idx]
+        nombres_myr = data[col_nombre_myr]
+        
+        # Identificar filas a eliminar según los 3 criterios
+        filas_a_eliminar = []
+        
+        log(f"Analizando {len(referencias)} registros...")
+        
+        for i in range(len(referencias)):
+            ref = str(referencias[i]).strip() if referencias[i] not in [None, "", "None"] else ""
+            nombre = str(nombres_myr[i]).strip() if nombres_myr[i] not in [None, "", "None"] else ""
+            
+            motivo_eliminacion = None
+            
+            # CRITERIO 1: NOMBRE MYR contiene "Publicidad"
+            if "publicidad" in nombre.lower():
+                motivo_eliminacion = "Publicidad en NOMBRE MYR"
+            
+            # CRITERIO 2: REFERENCIA con patrón 00##Letras (sin símbolos como /)
+            # Ejemplo: 0041R, 0012AB, etc.
+            elif ref and "/" not in ref and "\\" not in ref:
+                # Verificar patrón: 2 ceros iniciales + 2 dígitos + letras
+                import re
+                # Patrón: exactamente 2 ceros, seguido de exactamente 2 dígitos, seguido de al menos una letra
+                patron = r'^00\d{2}[A-Za-z]+$'
+                if re.match(patron, ref):
+                    motivo_eliminacion = "Patrón 00##Letras en REFERENCIA"
+            
+            # CRITERIO 3: NOMBRE MYR contiene "Ajuste de precios"
+            if not motivo_eliminacion and "ajuste de precios" in nombre.lower():
+                motivo_eliminacion = "Ajuste de precios en NOMBRE MYR"
+            
+            # Si cumple algún criterio, agregar a lista de eliminación
+            if motivo_eliminacion:
+                filas_a_eliminar.append((i, ref, nombre, motivo_eliminacion))
+        
+        # Eliminar filas
+        if filas_a_eliminar:
+            log(f"")
+            log(f"Se encontraron {len(filas_a_eliminar)} registros para eliminar:")
+            log(f"")
+            
+            # Mostrar resumen por motivo
+            from collections import Counter
+            motivos = Counter([item[3] for item in filas_a_eliminar])
+            for motivo, cantidad in motivos.items():
+                log(f"  • {motivo}: {cantidad} registros")
+            
+            log(f"")
+            log(f"Ejemplos de registros a eliminar:")
+            for idx, ref, nombre, motivo in filas_a_eliminar[:10]:
+                log(f"  - Ref: {ref[:30]:<30} | Nombre: {nombre[:40]:<40} | Motivo: {motivo}")
+            
+            if len(filas_a_eliminar) > 10:
+                log(f"  ... y {len(filas_a_eliminar) - 10} más")
+            
+            log(f"")
+            log(f"Eliminando filas...")
+            
+            # Eliminar en orden inverso para no afectar índices
+            for idx, ref, nombre, motivo in sorted(filas_a_eliminar, reverse=True):
+                fila_excel = start_data_row + idx
+                try:
+                    ws_inv_copia.Rows(fila_excel).Delete()
+                except Exception as e:
+                    log(f"    ⚠ Error al eliminar fila {fila_excel} (Ref: {ref}): {e}")
+            
+            # Actualizar last_row
+            last_row = last_row - len(filas_a_eliminar)
+            log(f"")
+            log(f"✓ {len(filas_a_eliminar)} filas eliminadas exitosamente")
+            log(f"✓ Nuevo rango: hasta fila {last_row}")
+            log(f"")
+        else:
+            log("✓ No se encontraron registros que cumplan los criterios de eliminación")
+            log("")
+        
+        return last_row
+        
+    except Exception as e:
+        log(f"❌ ERROR al eliminar registros estandarizados: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return last_row
+
 
 # ==== WS UTILS  ====
 def ws_last_row(ws, key_col_idx: int, header_row_visible: int):
@@ -2906,6 +3020,17 @@ def main():
         log("✓ Paneles inmovilizados en fila 3")
     except Exception as e:
         log(f"⚠ Error al inmovilizar paneles: {e}")
+
+    # NUEVO: Eliminar registros según criterios estandarizados
+    log("")
+    log("FASE: Eliminación de registros estandarizados")
+    last_row = eliminar_registros_estandarizados(
+        ws_inv_copia, 
+        start_data_row, 
+        last_row, 
+        ref_col_idx, 
+        hdrn_copia
+    )
         
     # Aplicar reglas de marcas propias 
     log("Aplicando reglas de negocio para marcas propias...")
