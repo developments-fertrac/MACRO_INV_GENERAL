@@ -2145,6 +2145,7 @@ def main():
 
     # 1) Cargar datos externos
     log("Cargando datos externos...")
+
     df_src = cargar_inventario_actualizado(BASE_PATH)
 
     # Valorizados
