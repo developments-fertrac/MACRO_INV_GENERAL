@@ -11,8 +11,17 @@ import msoffcrypto
 from unidecode import unidecode
 import tempfile
 import warnings
-import openpyxl
+import shutil
+import win32com
 
+# Limpiar caché corrupto de win32com
+try:
+    gen_py_path = Path(win32com.__gen_path__)
+    if gen_py_path.exists():
+        shutil.rmtree(gen_py_path)
+        print(f"[INFO] Caché win32com limpiado: {gen_py_path}")
+except Exception as e:
+    print(f"[ADVERTENCIA] No se pudo limpiar caché win32com: {e}")
 # Suprimir advertencias de openpyxl sobre formato condicional
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
