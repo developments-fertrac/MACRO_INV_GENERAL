@@ -11,8 +11,17 @@ import msoffcrypto
 from unidecode import unidecode
 import tempfile
 import warnings
-import openpyxl
+import shutil
+import win32com
 
+# Limpiar caché corrupto de win32com
+try:
+    gen_py_path = Path(win32com.__gen_path__)
+    if gen_py_path.exists():
+        shutil.rmtree(gen_py_path)
+        print(f"[INFO] Caché win32com limpiado: {gen_py_path}")
+except Exception as e:
+    print(f"[ADVERTENCIA] No se pudo limpiar caché win32com: {e}")
 # Suprimir advertencias de openpyxl sobre formato condicional
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
@@ -4146,10 +4155,67 @@ def main():
         log(traceback.format_exc())
         excel.DisplayAlerts = True
 
-    #Actualizar tablas dinámicas en RESUMEN LINEA y Hoja2
+
+
+    # Actualizar tablas dinámicas en RESUMEN LINEA y Hoja2
 
     log("Actualizando tablas dinámicas...")
     try:
+        # PASO 1: Determinar el rango correcto de datos (excluyendo fila de subtotales)
+        ws_inv_final = None
+        for i in range(1, wb.Worksheets.Count + 1):
+            sheet_name = wb.Worksheets(i).Name
+            if _norm(sheet_name) == _norm(SHEET_INV_ORIG):
+                ws_inv_final = wb.Worksheets(i)
+                break
+        
+        last_data_row_for_pivot = None
+        first_col = 1
+        last_col = 1
+        
+        if ws_inv_final:
+            log("  Determinando rango de datos para tablas dinámicas...")
+            
+            # Obtener encabezados
+            hdr_final, hdrn_final = ws_headers(ws_inv_final, HEADER_ROW_INV)
+            
+            # Buscar columna EXISTENCIA para detectar última fila con datos
+            exist_col_final = None
+            for name, col in hdr_final.items():
+                if str(name).upper().startswith("EXISTENCIA"):
+                    exist_col_final = col
+                    break
+            
+            if exist_col_final:
+                # Encontrar última fila con datos
+                last_row_temp = ws_last_row(ws_inv_final, exist_col_final, HEADER_ROW_INV)
+                
+                # Verificar si la última fila contiene SUBTOTAL (fórmula)
+                try:
+                    cell_formula = ws_inv_final.Cells(last_row_temp, exist_col_final).Formula
+                    
+                    if cell_formula and "SUBTOTAL" in str(cell_formula).upper():
+                        # Es una fila de subtotales - excluirla del rango de la tabla dinámica
+                        last_data_row_for_pivot = last_row_temp - 1
+                        log(f"  ✓ Fila de subtotales detectada en fila {last_row_temp}")
+                        log(f"  ✓ Rango para tabla dinámica: hasta fila {last_data_row_for_pivot}")
+                    else:
+                        # No hay subtotal al final
+                        last_data_row_for_pivot = last_row_temp
+                        log(f"  ℹ No se detectó fila de subtotales - usando fila {last_data_row_for_pivot}")
+                except Exception as e:
+                    last_data_row_for_pivot = last_row_temp
+                    log(f"  ⚠ Error al verificar subtotales: {e}")
+            
+            # Determinar rango de columnas
+            try:
+                used_range = ws_inv_final.UsedRange
+                first_col = used_range.Column
+                last_col = first_col + used_range.Columns.Count - 1
+            except:
+                pass
+        
+        # PASO 2: Actualizar tablas dinámicas
         hojas_para_actualizar = ["RESUMEN LINEA", "Hoja2"]
         tablas_actualizadas = 0
         
@@ -4190,23 +4256,43 @@ def main():
                         # Obtener el nombre de la tabla dinámica si existe
                         try:
                             pivot_name = pivot_table.Name
-                            log(f" - Actualizando tabla: {pivot_name}")
+                            log(f"    - Actualizando tabla: {pivot_name}")
                         except:
-                            log(f" - Actualizando tabla {j}")
+                            log(f"    - Actualizando tabla {j}")
+                        
+                        # CRÍTICO: Cambiar el rango de origen ANTES de refrescar
+                        if last_data_row_for_pivot and ws_inv_final:
+                            try:
+                                # Construir referencia del nuevo rango (excluyendo subtotales)
+                                col_letter_last = _col_num_to_letter(last_col)
+                                new_source = f"INVENTARIO!$A${HEADER_ROW_INV}:${col_letter_last}${last_data_row_for_pivot}"
+                                
+                                # Crear nuevo PivotCache con el rango correcto
+                                new_cache = wb.PivotCaches().Create(
+                                    SourceType=1,  # xlDatabase
+                                    SourceData=new_source
+                                )
+                                
+                                # Cambiar el cache de la tabla dinámica
+                                pivot_table.ChangePivotCache(new_cache)
+                                log(f"      ✓ Rango actualizado a: {new_source}")
+                                
+                            except Exception as e:
+                                log(f"      ⚠ No se pudo cambiar rango (se usará el existente): {e}")
                         
                         # Refrescar la tabla dinámica
                         pivot_table.RefreshTable()
                         tablas_actualizadas += 1
-                        log(f"Tabla dinámica actualizada")
+                        log(f"      ✓ Tabla actualizada")
                         
                     except Exception as e:
-                        log(f"    ✗ Error al actualizar tabla {j}: {e}")
+                        log(f"      ✗ Error al actualizar tabla {j}: {e}")
                         
             except Exception as e:
                 log(f"  ✗ Error al procesar hoja '{nombre_hoja}': {e}")
         
         if tablas_actualizadas > 0:
-            log(f" {tablas_actualizadas} tabla(s) dinámica(s) actualizada(s) exitosamente")
+            log(f"✓ {tablas_actualizadas} tabla(s) dinámica(s) actualizada(s) exitosamente")
         else:
             log("⚠ No se actualizaron tablas dinámicas")
         
@@ -4214,7 +4300,7 @@ def main():
         log(f"❌ ERROR al actualizar tablas dinámicas: {e}")
         import traceback
         log(traceback.format_exc())
-        
+
     # Establecer zoom al 80% en TODAS las hojas
     log("Estableciendo zoom al 80% en todas las hojas...")
     try:
@@ -4342,6 +4428,43 @@ def main():
             import traceback
             log(traceback.format_exc())    
         
+        # ===== ESTABLECER ALTO DE FILAS =====
+        log("Estableciendo alto de filas en 14,5...")
+        try:
+            # Buscar la hoja INVENTARIO
+            ws_inv_final = None
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name = wb.Worksheets(i).Name
+                if _norm(sheet_name) == _norm(SHEET_INV_ORIG):
+                    ws_inv_final = wb.Worksheets(i)
+                    break
+            
+            if ws_inv_final:
+                # Determinar última fila con datos (considerando pivots)
+                pivot_top = ws_first_pivot_row(ws_inv_final)
+                if pivot_top and pivot_top > HEADER_ROW_INV:
+                    ultima_fila = pivot_top - 1
+                else:
+                    # Usar el rango usado para determinar la última fila
+                    used_range = ws_inv_final.UsedRange
+                    ultima_fila = used_range.Rows.Count
+                
+                # Establecer alto de 14.5 para todas las filas desde la 3 hasta la última
+                if ultima_fila > 2:
+                    rango_filas = f"3:{ultima_fila}"
+                    ws_inv_final.Rows(rango_filas).RowHeight = 14.5
+                    log(f"✅ Alto de fila establecido en 14,5 para filas 3 a {ultima_fila}")
+                else:
+                    log("  ℹ No hay filas después de la fila 2 para modificar")
+                
+            else:
+                log(f"  ⚠️ No se encontró la hoja '{SHEET_INV_ORIG}'")
+                
+        except Exception as e:
+            log(f"  ⚠️ Error al establecer alto de filas: {e}")
+            import traceback
+            log(traceback.format_exc())
+
         # GUARDAR después de establecer el zoom y activar la hoja
         log("Guardando cambios con zoom aplicado y hoja INVENTARIO activa...")
         wb.Save()
