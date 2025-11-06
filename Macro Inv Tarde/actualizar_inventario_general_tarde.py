@@ -598,84 +598,133 @@ def main():
             log("  ✗ No se encontraron archivos VALORIZADO")
             return
         
-        # 9) Consolidar datos
+        # 9) Consolidar datos - VERSIÓN CORREGIDA (CON RESTA)
         log("\n🔀 8. Consolidando datos de VALORIZADO...")
-        df_all = pd.concat(dfs_val, ignore_index=True)
-        log(f"  ✓ Total de filas: {len(df_all)}")
-        
-        # Mostrar columnas originales (primeras 10)
-        log(f"  📊 Columnas originales (primeras 10): {list(df_all.columns[:10])}")
-        
-        # Normalizar nombres de columnas
-        df_all.columns = [_norm(str(c)) for c in df_all.columns]
-        
-        # Mostrar columnas normalizadas (primeras 10)
-        log(f"  📊 Columnas normalizadas (primeras 10): {list(df_all.columns[:10])}")
-        
-        # Buscar columnas de manera flexible
-        col_referencia = find_column_flexible(df_all.columns, 
+
+        # Recargar archivos de forma separada (no concatenados)
+        try:
+            val_file_general = find_by_prefix(BASE_PATH, PFX_VAL_GENERAL)
+            df_general = load_valorizado_to_df(val_file_general, HEADER_ROW_VAL)
+            log(f"  ✓ GENERAL recargado: {len(df_general)} filas")
+        except:
+            df_general = pd.DataFrame()
+            log(f"  ⚠ GENERAL no disponible")
+
+        try:
+            val_file_falt_impo = find_by_prefix(BASE_PATH, PFX_VAL_FALT_IMPO)
+            df_falt_impo = load_valorizado_to_df(val_file_falt_impo, HEADER_ROW_VAL)
+            log(f"  ✓ FALTANTES IMPO recargado: {len(df_falt_impo)} filas")
+        except:
+            df_falt_impo = pd.DataFrame()
+
+        try:
+            val_file_faltantes = find_by_prefix(BASE_PATH, PFX_VAL_FALT)
+            df_faltantes = load_valorizado_to_df(val_file_faltantes, HEADER_ROW_VAL)
+            log(f"  ✓ FALTANTES recargado: {len(df_faltantes)} filas")
+        except:
+            df_faltantes = pd.DataFrame()
+
+        try:
+            val_file_toberin = find_by_prefix(BASE_PATH, PFX_VAL_TOBERIN)
+            df_toberin = load_valorizado_to_df(val_file_toberin, HEADER_ROW_VAL)
+            log(f"  ✓ TOBERIN recargado: {len(df_toberin)} filas")
+        except:
+            df_toberin = pd.DataFrame()
+
+        # Normalizar columnas en cada DataFrame
+        for df_temp in [df_general, df_falt_impo, df_faltantes, df_toberin]:
+            if not df_temp.empty:
+                df_temp.columns = [_norm(str(c)) for c in df_temp.columns]
+
+        if df_general.empty:
+            log("  ✗ VALORIZADO GENERAL está vacío")
+            return
+
+        col_referencia = find_column_flexible(df_general.columns, 
             ["referencia", "ref", "codigo", "codigo producto"])
-        col_existencia = find_column_flexible(df_all.columns, 
+        col_existencia = find_column_flexible(df_general.columns, 
             ["existencia en bodega", "existencia bodega", "existencia", "cantidad"])
-        col_costo = find_column_flexible(df_all.columns, 
+        col_costo = find_column_flexible(df_general.columns, 
             ["costo promedio", "costo prom", "costo", "precio costo"])
-        
-        if not col_referencia:
-            log("  ✗ No se encontró columna de REFERENCIA en VALORIZADO")
-            log(f"  📊 Columnas disponibles: {list(df_all.columns)}")
+
+        if not col_referencia or not col_existencia or not col_costo:
+            log("  ✗ Columnas requeridas no encontradas")
             return
-        
-        if not col_existencia:
-            log("  ✗ No se encontró columna de EXISTENCIA EN BODEGA en VALORIZADO")
-            log(f"  📊 Columnas disponibles: {list(df_all.columns)}")
-            return
-        
-        if not col_costo:
-            log("  ✗ No se encontró columna de COSTO PROMEDIO en VALORIZADO")
-            log(f"  📊 Columnas disponibles: {list(df_all.columns)}")
-            return
-        
-        log(f"  ✓ Columna REFERENCIA encontrada: '{col_referencia}'")
-        log(f"  ✓ Columna EXISTENCIA encontrada: '{col_existencia}'")
-        log(f"  ✓ Columna COSTO encontrada: '{col_costo}'")
-        
+
+        log(f"  ✓ Columnas: REFERENCIA='{col_referencia}', EXISTENCIA='{col_existencia}'")
+
         # Normalizar referencias
-        df_all["ref_norm"] = df_all[col_referencia].apply(to_num_str)
-        
-        # Crear diccionarios de existencias y costos
+        if not df_general.empty:
+            df_general["ref_norm"] = df_general[col_referencia].apply(to_num_str)
+        if not df_falt_impo.empty:
+            df_falt_impo["ref_norm"] = df_falt_impo[col_referencia].apply(to_num_str)
+        if not df_faltantes.empty:
+            df_faltantes["ref_norm"] = df_faltantes[col_referencia].apply(to_num_str)
+        if not df_toberin.empty:
+            df_toberin["ref_norm"] = df_toberin[col_referencia].apply(to_num_str)
+
+        # Consolidar cantidades a restar
+        log("\n📊 Consolidando cantidades a restar...")
+        log("  Fórmula: GENERAL - (FALTANTES IMPO + FALTANTES + TOBERIN)")
+
+        resta_map = {}
+
+        if not df_falt_impo.empty:
+            for _, row in df_falt_impo.iterrows():
+                ref = row.get("ref_norm")
+                cantidad = float(row.get(col_existencia, 0)) if pd.notna(row.get(col_existencia)) else 0
+                if ref is not None and cantidad > 0:
+                    resta_map[ref] = resta_map.get(ref, 0) + cantidad
+
+        if not df_faltantes.empty:
+            for _, row in df_faltantes.iterrows():
+                ref = row.get("ref_norm")
+                cantidad = float(row.get(col_existencia, 0)) if pd.notna(row.get(col_existencia)) else 0
+                if ref is not None and cantidad > 0:
+                    resta_map[ref] = resta_map.get(ref, 0) + cantidad
+
+        if not df_toberin.empty:
+            for _, row in df_toberin.iterrows():
+                ref = row.get("ref_norm")
+                cantidad = float(row.get(col_existencia, 0)) if pd.notna(row.get(col_existencia)) else 0
+                if ref is not None and cantidad > 0:
+                    resta_map[ref] = resta_map.get(ref, 0) + cantidad
+
+        log(f"  ✓ {len(resta_map)} referencias con cantidades a restar")
+
+        # Calcular existencia final
+        log("\n🧮 Calculando existencia final: GENERAL - RESTAS...")
+
         exist_map = {}
         costo_map = {}
-        
-        for _, row in df_all.iterrows():
-            ref = row["ref_norm"]
-            if not ref:
-                continue
-            
-            exist_val = row.get(col_existencia, 0)
-            costo_val = row.get(col_costo, 0)
-            
-            # Convertir a número
-            try:
-                exist_val = float(exist_val) if pd.notna(exist_val) else 0
-            except:
-                exist_val = 0
-            
-            try:
-                costo_val = float(costo_val) if pd.notna(costo_val) else 0
-            except:
-                costo_val = 0
-            
-            # Si ya existe, sumar
-            if ref in exist_map:
-                exist_map[ref] += exist_val
-                # Para costo, tomar el mayor
-                if costo_val > costo_map[ref]:
-                    costo_map[ref] = costo_val
-            else:
-                exist_map[ref] = exist_val
-                costo_map[ref] = costo_val
-        
-        log(f"  ✓ {len(exist_map)} referencias únicas consolidadas")
+        restas_aplicadas = 0
+
+        if not df_general.empty:
+            for _, row in df_general.iterrows():
+                ref = row.get("ref_norm")
+                exist_general = float(row.get(col_existencia, 0)) if pd.notna(row.get(col_existencia)) else 0
+                costo_val = float(row.get(col_costo, 0)) if pd.notna(row.get(col_costo)) else 0
+                
+                if ref is not None:
+                    cantidad_resta = resta_map.get(ref, 0)
+                    existencia_final = exist_general - cantidad_resta
+                    
+                    exist_map[ref] = existencia_final
+                    if costo_val > 0:
+                        costo_map[ref] = costo_val
+                    
+                    if cantidad_resta > 0:
+                        restas_aplicadas += 1
+                        if restas_aplicadas <= 10:
+                            log(f"    Ref {ref}: {exist_general} - {cantidad_resta} = {existencia_final}")
+
+        log(f"  ✓ {len(exist_map)} referencias procesadas")
+        log(f"  ✓ {restas_aplicadas} con restas aplicadas")
+
+        negativos = [ref for ref, val in exist_map.items() if val < 0]
+        if negativos:
+            log(f"  ⚠️ {len(negativos)} referencias con existencia NEGATIVA")
+
         
         # 10) Actualizar EXISTENCIAS
         log("\n✍️ 8. Actualizando columna EXISTENCIA en INVENTARIO...")
@@ -699,17 +748,18 @@ def main():
         log(f"    - Coincidencias encontradas: {matched_exist}")
         log(f"    - Sin valor: {len(existencias) - matched_exist}")
         
+
         # 11) Actualizar COSTOS
         log("\n✍️ 8. Actualizando columna COSTO PROMEDIO en INVENTARIO...")
-        
+
         # Leer existencias actualizadas para determinar cuáles deben ser 0
         existencias_actuales = read_range_as_array(ws_inv, start_data_row, last_row_inv, exist_col)
-        
+
         costos = []
         matched_costo = 0
         costos_con_valor = 0
         costos_cero_por_existencia = 0
-        
+
         for i, ref_norm in enumerate(refs_inv_norm):
             # Si la existencia es 0, el costo debe ser 0
             try:
@@ -723,16 +773,15 @@ def main():
             elif ref_norm and ref_norm in costo_map:
                 val = costo_map[ref_norm]
                 if pd.notna(val) and val != 0:
-                    # Redondear a 2 decimales (pero NO cambiar formato de Excel)
-                    costo_redondeado = round(float(val), 2)
-                    costos.append(costo_redondeado)
+                    # Mantener valor exacto del VALORIZADO GENERAL (sin redondear)
+                    costos.append(float(val))
                     matched_costo += 1
                     costos_con_valor += 1
                 else:
                     costos.append(0)
             else:
                 costos.append(0)
-        
+
         write_range_as_array(ws_inv, start_data_row, costo_col, costos)
         log(f"  ✓ COSTO PROMEDIO actualizado:")
         log(f"    - Total procesado: {len(costos)}")
@@ -740,7 +789,7 @@ def main():
         log(f"    - Valores con costo > 0: {costos_con_valor}")
         log(f"    - Ceros por existencia=0: {costos_cero_por_existencia}")
         log(f"    - Sin valor: {len(costos) - matched_costo - costos_cero_por_existencia}")
-        log(f"    - Valores redondeados a 2 decimales (formato Excel preservado)")
+        log(f"    - Valores exactos de VALORIZADO GENERAL (sin redondeo)")
 
         # 13) ORDENAR INV LISTA PRECIOS SEGÚN EL ORDEN DE INVENTARIO
         log("\n🔄 9. Ordenando INV LISTA PRECIOS según orden de INVENTARIO...")
@@ -918,11 +967,9 @@ def main():
                     import traceback
                     log(traceback.format_exc())
                 
-                else:
-                    log(f"  ⚠ No se encontró columna REFERENCIA FERTRAC")
-                    log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
             else:
-                log(f"  ℹ️ No se encontró hoja INV LISTA PRECIOS (esto es normal si no existe)")
+                log(f"  ⚠ No se encontró columna REFERENCIA FERTRAC")
+                log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
                 
         except Exception as e:
             log(f"  ⚠ Error al ordenar INV LISTA PRECIOS: {e}")
