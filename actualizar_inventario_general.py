@@ -3202,7 +3202,7 @@ def main():
         import traceback
         log(traceback.format_exc())
 
-    # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
+# 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
     try:
         ws_lp = None
@@ -3234,89 +3234,38 @@ def main():
                 
                 log(f"{len(referencias_copia)} referencias a copiar")
                 
-                # APLICAR CORRECCIÓN PARA REFERENCIAS CON "/"
-                has_slash = any("/" in str(v) for v in referencias_copia if v not in (None, "", "None"))
+                slash_count = 0
+                numeric_count = 0
                 
-                if has_slash:
-
-                    last_row_lp = hr_lp + len(referencias_copia)
+                # Escribir celda por celda con manejo especial
+                for idx, v in enumerate(referencias_copia):
+                    cell = ws_lp.Cells(hr_lp + 1 + idx, ref_fertrac_idx)
                     
-                    # Establecer formato de TEXTO primero
-                    rng = ws_lp.Range(
-                        ws_lp.Cells(hr_lp + 1, ref_fertrac_idx),
-                        ws_lp.Cells(last_row_lp, ref_fertrac_idx)
-                    )
-                    
-                    rng.NumberFormat = "@"  # Formato TEXTO para evitar división
-                    log(f"Formato de texto aplicado")
-                    
-                    # Convertir valores apropiadamente
-                    try:
-                        converted_values = []
-                        slash_count = 0
-                        numeric_count = 0
-                        
-                        for v in referencias_copia:
-                            if v in (None, "", "None"):
-                                converted_values.append([""])
-                            elif "/" in str(v):
-                                # Mantener como TEXTO si tiene "/"
-                                converted_values.append([str(v)])
-                                slash_count += 1
-                            elif not str(v).replace(".", "").replace("-", "").isdigit():
-                                # Mantener como texto si no es numérico
-                                converted_values.append([str(v)])
-                            else:
-                                # Convertir a número si es numérico puro
-                                try:
-                                    converted_values.append([float(v)])
-                                    numeric_count += 1
-                                except:
-                                    converted_values.append([str(v)])
-                        
-                        rng.Value = converted_values
-                        log(f"Valores escritos: {slash_count} con '/', {numeric_count} numéricos")
-                        
-                    except Exception as e:
-                        log(f"     ⚠️  Aviso en conversión: {e}")
-                        # Fallback: escribir directamente
-                        write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
-                    
-                    # MANTENER formato de texto para preservar valores con "/"
-                    # No cambiar a formato numérico porque convertiría "/" en división
-                    rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
-                    log(f"Formato de texto mantenido con alineación izquierda")
-                    
-                    # Ignorar advertencias de "número almacenado como texto"
-                    try:
-                        for i in range(1, 8):
-                            try:
-                                rng.Errors.Item(i).Ignore = True
-                            except:
-                                pass
-                        ws_lp.Parent.Application.ErrorCheckingOptions.NumberAsText = False
-                        log(f"Advertencias de Excel desactivadas")
-                    except Exception as e:
-                        log(f"   ⚠️  No se pudieron desactivar advertencias: {e}")
-                    
-                    log(f" {len(referencias_copia)} referencias copiadas con formato especial")
-                    
-                else:
-                    # Si NO hay referencias con "/", usar el método normal
-                    log(f"  ℹ️  No se detectaron referencias con '/' - usando método estándar")
-                    last_row_lp = hr_lp + len(referencias_copia)
-                    write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
-                    
-                    # Aplicar formato numérico
-                    try:
-                        rng = ws_lp.Range(ws_lp.Cells(hr_lp + 1, ref_fertrac_idx), 
-                                         ws_lp.Cells(last_row_lp, ref_fertrac_idx))
-                        rng.NumberFormat = "0"
-                        log(f"Formato numérico '0' aplicado")
-                    except Exception as e:
-                        log(f"     ⚠️  No se pudo aplicar formato numérico: {e}")
-                    
-                    log(f"   {len(referencias_copia)} referencias copiadas")
+                    if v in (None, "", "None"):
+                        cell.Value = ""
+                    elif "/" in str(v):
+                        # CLAVE: Formato texto ANTES y usar Value2 o fórmula texto
+                        cell.NumberFormat = "@"
+                        cell.Formula = '="' + str(v).replace('"', '""') + '"'
+                        cell.HorizontalAlignment = -4131  # xlLeft
+                        try:
+                            cell.Errors.Item(1).Ignore = True
+                        except:
+                            pass
+                        slash_count += 1
+                    else:
+                        # Intentar como número
+                        try:
+                            num_val = float(str(v).strip())
+                            cell.NumberFormat = "0"
+                            cell.Value = num_val
+                            numeric_count += 1
+                        except:
+                            cell.NumberFormat = "@"
+                            cell.Value2 = str(v)
+                
+                log(f"Valores escritos: {slash_count} con '/' (texto), {numeric_count} numéricos")
+                log(f" {len(referencias_copia)} referencias copiadas")
                 
             else:
                 log("  ⚠️  No se encontró columna REFERENCIA FERTRAC")
@@ -3331,11 +3280,9 @@ def main():
     # 15) Llenar REFERENCIA LISTA DE PRECIOS en INV LISTA PRECIOS desde MATRIZ USD
     log("Llenando REFERENCIA LISTA DE PRECIOS desde MATRIZ USD...")
     try:
-        # Verificar que tenemos datos de Matriz USD
         if len(matriz_map_ref_lista) == 0:
             log("  ⚠ No hay datos de REFERENCIA LISTA DE PRECIOS en Matriz USD - saltando")
         else:
-            # Buscar la hoja INV LISTA PRECIOS
             ws_lp = None
             target_norm = _norm(SHEET_INV_LISTA)
             
@@ -3355,10 +3302,8 @@ def main():
                         break
             
             if ws_lp:
-                # Obtener encabezados de INV LISTA PRECIOS
                 hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
                 
-                # Buscar columnas necesarias
                 ref_fertrac_idx = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
                 ref_lista_idx = hdrn_lp.get(_norm("REFERENCIA LISTA DE PRECIOS")) or \
                                hdrn_lp.get(_norm("REFERENCIA LISTA")) or \
@@ -3374,7 +3319,6 @@ def main():
                     log(f" - REFERENCIA FERTRAC: índice {ref_fertrac_idx}")
                     log(f" - REFERENCIA LISTA DE PRECIOS: índice {ref_lista_idx}")
                     
-                    # Determinar última fila con datos
                     last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx, hr_lp)
                     pivot_top_lp = ws_first_pivot_row(ws_lp)
                     if pivot_top_lp and pivot_top_lp > hr_lp:
@@ -3382,112 +3326,57 @@ def main():
                     
                     log(f"Procesando {last_row_lp - hr_lp} filas...")
                     
-                    # Leer REFERENCIA FERTRAC de INV LISTA PRECIOS
                     refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx)
                     refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
                     
-                    # Cruzar con MATRIZ USD para obtener REFERENCIA LISTA DE PRECIOS
                     refs_lista_precios = []
                     matched = 0
 
                     for ref_fertrac in refs_fertrac_lp_norm:
                         if ref_fertrac and ref_fertrac in matriz_map_ref_lista:
                             ref_lista_val = matriz_map_ref_lista[ref_fertrac]
-                            # Validar que no esté vacío (PERO ACEPTAR "0" como valor válido)
                             if ref_lista_val is not None and str(ref_lista_val).strip() not in ("", "None", "nan"):
-                                #  ACEPTA "0" como valor válido
                                 refs_lista_precios.append(str(ref_lista_val).strip())
                                 matched += 1
                             else:
                                 refs_lista_precios.append("")
                         else:
                             refs_lista_precios.append("")
-                            
-                    # APLICAR CORRECCIÓN PARA REFERENCIAS CON "/" en REFERENCIA LISTA DE PRECIOS
-                    has_slash = any("/" in str(v) for v in refs_lista_precios if v not in (None, "", "None"))
                     
-                    if has_slash:
-                        last_row_ref_lista = hr_lp + len(refs_lista_precios)
+                    slash_count = 0
+                    numeric_count = 0
+                    
+                    # Escribir celda por celda con manejo especial
+                    for idx, v in enumerate(refs_lista_precios):
+                        cell = ws_lp.Cells(hr_lp + 1 + idx, ref_lista_idx)
                         
-                        # Establecer formato de TEXTO primero
-                        rng = ws_lp.Range(
-                            ws_lp.Cells(hr_lp + 1, ref_lista_idx),
-                            ws_lp.Cells(last_row_ref_lista, ref_lista_idx)
-                        )
-                        
-                        rng.NumberFormat = "@"  # Formato TEXTO para evitar división
-                        log(f"Formato de texto aplicado en REFERENCIA LISTA DE PRECIOS")
-                        
-                        # Convertir valores apropiadamente
-                        try:
-                            converted_values = []
-                            slash_count = 0
-                            numeric_count = 0
-                            
-                            for v in refs_lista_precios:
-                                if v in (None, "", "None"):
-                                    converted_values.append([""])
-                                elif "/" in str(v):
-                                    # Mantener como TEXTO si tiene "/"
-                                    converted_values.append([str(v)])
-                                    slash_count += 1
-                                elif not str(v).replace(".", "").replace("-", "").isdigit():
-                                    # Mantener como texto si no es numérico
-                                    converted_values.append([str(v)])
-                                else:
-                                    # Convertir a número si es numérico puro
-                                    try:
-                                        converted_values.append([float(v)])
-                                        numeric_count += 1
-                                    except:
-                                        converted_values.append([str(v)])
-                            
-                            rng.Value = converted_values
-                            log(f"Valores escritos en REFERENCIA LISTA DE PRECIOS: {slash_count} con '/', {numeric_count} numéricos")
-                            
-                        except Exception as e:
-                            log(f"     ⚠️  Aviso en conversión: {e}")
-                            # Fallback: escribir directamente
-                            write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
-                        
-                        # MANTENER formato de texto para preservar valores con "/"
-                        # No cambiar a formato numérico porque convertiría "/" en división
-                        rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
-                        log(f"Formato de texto mantenido con alineación izquierda en REFERENCIA LISTA DE PRECIOS")
-                        
-                        # Ignorar advertencias de "número almacenado como texto"
-                        try:
-                            for i in range(1, 8):
-                                try:
-                                    rng.Errors.Item(i).Ignore = True
-                                except:
-                                    pass
-                            ws_lp.Parent.Application.ErrorCheckingOptions.NumberAsText = False
-                            log(f"Advertencias de Excel desactivadas para REFERENCIA LISTA DE PRECIOS")
-                        except Exception as e:
-                            log(f"   ⚠️  No se pudieron desactivar advertencias: {e}")
-                        
-                        log(f" {len(refs_lista_precios)} referencias copiadas con formato especial")
-                        
-                    else:
-                        # Si NO hay referencias con "/", usar el método normal
-                        log(f"  ℹ️  No se detectaron referencias con '/' en REFERENCIA LISTA DE PRECIOS - usando método estándar")
-                        write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
-                        
-                        # Aplicar formato numérico
-                        try:
-                            last_row_ref_lista = hr_lp + len(refs_lista_precios)
-                            rng = ws_lp.Range(ws_lp.Cells(hr_lp + 1, ref_lista_idx), 
-                                             ws_lp.Cells(last_row_ref_lista, ref_lista_idx))
-                            rng.NumberFormat = "0"
-                            log(f"Formato numérico '0' aplicado en REFERENCIA LISTA DE PRECIOS")
-                        except Exception as e:
-                            log(f"     ⚠️  No se pudo aplicar formato numérico: {e}")
+                        if v in (None, "", "None"):
+                            cell.Value = ""
+                        elif "/" in str(v):
+                            # CLAVE: Formato texto ANTES y usar Value2
+                            cell.NumberFormat = "@"
+                            cell.Formula = '="' + str(v).replace('"', '""') + '"'
+                            cell.HorizontalAlignment = -4131  # xlLeft
+                            try:
+                                cell.Errors.Item(1).Ignore = True
+                            except:
+                                pass
+                            slash_count += 1
+                        else:
+                            # Intentar como número
+                            try:
+                                num_val = float(str(v).strip())
+                                cell.NumberFormat = "0"
+                                cell.Value = num_val
+                                numeric_count += 1
+                            except:
+                                cell.NumberFormat = "@"
+                                cell.Value2 = str(v)
                     
                     log(f"REFERENCIA LISTA DE PRECIOS actualizada:")
                     log(f" - Total procesado: {len(refs_lista_precios)}")
                     log(f" - Coincidencias encontradas: {matched}")
-                    log(f" - Sin coincidencia: {len(refs_lista_precios) - matched}")
+                    log(f" - Con '/': {slash_count} (texto), Numéricos: {numeric_count}")
                     
             else:
                 log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
