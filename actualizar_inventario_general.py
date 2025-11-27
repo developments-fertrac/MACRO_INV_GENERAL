@@ -468,6 +468,413 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
 
     return df.rename(columns=rename)
 
+
+# ============================================================================
+# FUNCIÓN: ACTUALIZAR REFERENCIAS DESDE FORMATO CODIFICACIÓN
+# ============================================================================
+
+def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path, password: str):
+    """
+    Actualiza las referencias en la hoja INVENTARIO original basándose en 
+    FORMATO CODIFICACIÓN.xlsx antes de empezar el proceso principal.
+    
+    Args:
+        wb: Workbook de Excel abierto
+        ws_inv_orig: Worksheet INVENTARIO original
+        base_path: Directorio base
+        password: Contraseña del archivo
+    
+    Returns:
+        int: Número de referencias actualizadas
+    """
+    try:
+        log("="*70)
+        log("ACTUALIZANDO REFERENCIAS DESDE FORMATO CODIFICACIÓN")
+        log("="*70)
+        
+        # 1. BUSCAR ARCHIVO FORMATO CODIFICACIÓN
+        archivo_formato = None
+        patron_formato = "FORMATO CODIFICACIÓN"
+        
+        for f in base_path.iterdir():
+            if f.is_file() and f.suffix.lower() in ('.xlsx', '.xlsm'):
+                if _norm(patron_formato) in _norm(f.name):
+                    archivo_formato = f
+                    log(f"Archivo encontrado: {f.name}")
+                    break
+        
+        if not archivo_formato:
+            log("⚠️ No se encontró archivo FORMATO CODIFICACIÓN - saltando actualización")
+            log("="*70)
+            return 0
+        
+        # 2. CARGAR REFERENCIAS A MODIFICAR
+        log("Cargando referencias a modificar...")
+        
+        try:
+            src_formato = open_as_excel_source(archivo_formato, PASSWORDS_TRY)
+            
+            # Intentar encontrar la hoja
+            xf = pd.ExcelFile(src_formato, engine="openpyxl")
+            sheet_codificacion = None
+            
+            for sn in xf.sheet_names:
+                sn_norm = _norm(sn)
+                if "modificacion" in sn_norm and "ref" in sn_norm:
+                    sheet_codificacion = sn
+                    log(f"Hoja encontrada: '{sn}'")
+                    break
+            
+            if not sheet_codificacion:
+                # Intentar variantes
+                for sn in xf.sheet_names:
+                    sn_norm = _norm(sn)
+                    if "cambio" in sn_norm or "actualizacion" in sn_norm:
+                        sheet_codificacion = sn
+                        log(f"Hoja encontrada (alternativa): '{sn}'")
+                        break
+            
+            if not sheet_codificacion:
+                log("⚠️ No se encontró hoja de modificaciones - usando primera hoja")
+                sheet_codificacion = xf.sheet_names[0]
+            
+            # Leer archivo (encabezados en fila 2, datos desde fila 3)
+            df_codificacion = pd.read_excel(
+                src_formato,
+                sheet_name=sheet_codificacion,
+                engine="openpyxl",
+                header=1  # Fila 2 (índice 1)
+            )
+            
+            log(f"Total de registros cargados: {len(df_codificacion)}")
+            
+            # 3. FILTRAR SOLO MODIFICADOS
+            # Buscar columna SISTEMA
+            col_sistema = None
+            for col in df_codificacion.columns:
+                if _norm(col) == _norm("SISTEMA"):
+                    col_sistema = col
+                    break
+            
+            if not col_sistema:
+                log("⚠️ No se encontró columna SISTEMA")
+                return 0
+            
+            # Filtrar
+            df_modificaciones = df_codificacion[
+                df_codificacion[col_sistema].astype(str).str.strip().str.upper() == 'MODIFICADO'
+            ].copy()
+            
+            log(f"Registros con SISTEMA='MODIFICADO': {len(df_modificaciones)}")
+            
+            if len(df_modificaciones) == 0:
+                log("No hay referencias para modificar")
+                log("="*70)
+                return 0
+            
+            # 4. BUSCAR COLUMNAS DE REFERENCIAS
+            col_ref_antigua = None
+            col_ref_nueva = None
+            
+            for col in df_modificaciones.columns:
+                col_norm = _norm(col)
+                if "ref" in col_norm and "fertrac" in col_norm and "modificar" in col_norm:
+                    col_ref_antigua = col
+                elif "ref" in col_norm and "fertrac" in col_norm and "nueva" in col_norm:
+                    col_ref_nueva = col
+            
+            if not col_ref_antigua or not col_ref_nueva:
+                log(f"⚠️ No se encontraron columnas de referencias")
+                log(f"   Columnas disponibles: {list(df_modificaciones.columns)}")
+                return 0
+            
+            log(f"Columna antigua: '{col_ref_antigua}'")
+            log(f"Columna nueva: '{col_ref_nueva}'")
+            
+            # 5. CREAR DICCIONARIO DE MAPEO
+            mapeo = {}
+            for _, row in df_modificaciones.iterrows():
+                ref_antigua = str(row[col_ref_antigua]).strip()
+                ref_nueva = str(row[col_ref_nueva]).strip()
+                
+                # Validar que ambas sean válidas
+                if (ref_antigua and ref_antigua not in ('nan', 'None', '', 'N/A', '-') and
+                    ref_nueva and ref_nueva not in ('nan', 'None', '', 'N/A', '-', 'OK')):
+                    
+                    # Normalizar ambas referencias
+                    ref_antigua_norm = to_num_str(ref_antigua)
+                    ref_nueva_norm = to_num_str(ref_nueva)
+                    
+                    if ref_antigua_norm and ref_nueva_norm:
+                        mapeo[ref_antigua_norm] = ref_nueva_norm
+            
+            log(f"Mapa de reemplazos creado: {len(mapeo)} referencias válidas")
+            
+            if len(mapeo) == 0:
+                log("No hay referencias válidas para reemplazar")
+                log("="*70)
+                return 0
+            
+            # Mostrar muestra
+            log("")
+            log("Muestra de cambios a aplicar:")
+            for i, (ref_ant, ref_nue) in enumerate(list(mapeo.items())[:5]):
+                log(f"  {ref_ant:40} → {ref_nue}")
+            if len(mapeo) > 5:
+                log(f"  ... y {len(mapeo) - 5} más")
+            
+            # 6. ENCONTRAR COLUMNA REFERENCIA EN INVENTARIO ORIGINAL
+            log("")
+            log("Buscando columna REFERENCIA en INVENTARIO original...")
+            
+            # ✅ USANDO ws_headers_smart que retorna 3 valores
+            hr_orig, hdr_orig, hdrn_orig = ws_headers_smart(
+                ws_inv_orig, 
+                HEADER_ROW_INV,
+                ["REFERENCIA", "REFERENCIA FERTRAC"]
+            )
+            
+            ref_col_idx = hdrn_orig.get(_norm("REFERENCIA")) or \
+                         hdrn_orig.get(_norm("REFERENCIA FERTRAC")) or \
+                         find_reference_col_idx(hdrn_orig, ws_inv_orig, hr_orig)
+            
+            log(f"Columna REFERENCIA encontrada: índice {ref_col_idx}")
+            
+            # 7. DETERMINAR ÚLTIMA FILA
+            last_row_orig = ws_last_row(ws_inv_orig, ref_col_idx, HEADER_ROW_INV)
+            
+            # Ajustar por pivots
+            pivot_top = ws_first_pivot_row(ws_inv_orig)
+            if pivot_top and pivot_top > HEADER_ROW_INV:
+                last_row_orig = min(last_row_orig, pivot_top - 1)
+            
+            log(f"Rango a procesar: filas {HEADER_ROW_INV + 1} a {last_row_orig}")
+            
+            # 8. LEER TODAS LAS REFERENCIAS
+            log("")
+            log("Leyendo referencias actuales...")
+            
+            referencias_actuales = read_range_as_array(
+                ws_inv_orig, 
+                HEADER_ROW_INV + 1, 
+                last_row_orig, 
+                ref_col_idx
+            )
+            
+            # Normalizar
+            referencias_norm = [to_num_str(r) for r in referencias_actuales]
+            
+            log(f"Total de referencias leídas: {len(referencias_norm)}")
+            
+            # 9. REALIZAR REEMPLAZOS
+            log("")
+            log("Aplicando reemplazos...")
+            
+            nuevas_referencias = []
+            reemplazos_realizados = 0
+            referencias_actualizadas = set()
+            
+            # 🆕 REGISTRO DETALLADO PARA REPORTE
+            cambios_exitosos = []
+            
+            for i, ref_norm in enumerate(referencias_norm):
+                if ref_norm in mapeo:
+                    ref_nueva = mapeo[ref_norm]
+                    nuevas_referencias.append(ref_nueva)
+                    reemplazos_realizados += 1
+                    referencias_actualizadas.add(ref_norm)
+                    
+                    # 🆕 Guardar para reporte
+                    cambios_exitosos.append({
+                        'FILA_EXCEL': HEADER_ROW_INV + 1 + i,
+                        'REFERENCIA_ANTIGUA': referencias_actuales[i],  # Original sin normalizar
+                        'REFERENCIA_NUEVA': ref_nueva,
+                        'ESTADO': 'ACTUALIZADO'
+                    })
+                    
+                    if reemplazos_realizados <= 5:
+                        log(f"  Fila {HEADER_ROW_INV + 1 + i}: {ref_norm:40} → {ref_nueva}")
+                    elif reemplazos_realizados == 6:
+                        log(f"  ... procesando más reemplazos ...")
+                else:
+                    nuevas_referencias.append(referencias_actuales[i])
+            
+            log(f"Reemplazos realizados: {reemplazos_realizados}")
+            
+            # 10. ESCRIBIR DE VUELTA
+            if reemplazos_realizados > 0:
+                log("")
+                log("Escribiendo referencias actualizadas...")
+                
+                write_range_as_array(
+                    ws_inv_orig,
+                    HEADER_ROW_INV + 1,
+                    ref_col_idx,
+                    nuevas_referencias
+                )
+                
+                log(f"✅ Referencias actualizadas en INVENTARIO original")
+            else:
+                log("No se realizaron cambios")
+            
+            # 11. VERIFICAR REFERENCIAS NO ENCONTRADAS
+            refs_no_encontradas = set(mapeo.keys()) - referencias_actualizadas
+            
+            # 🆕 REGISTRO DE NO ENCONTRADAS PARA REPORTE
+            cambios_no_encontrados = []
+            for ref_antigua in refs_no_encontradas:
+                ref_nueva = mapeo[ref_antigua]
+                cambios_no_encontrados.append({
+                    'FILA_EXCEL': 'N/A',
+                    'REFERENCIA_ANTIGUA': ref_antigua,
+                    'REFERENCIA_NUEVA': ref_nueva,
+                    'ESTADO': 'NO ENCONTRADA EN INVENTARIO'
+                })
+            
+            if refs_no_encontradas:
+                log("")
+                log(f"⚠️ Referencias NO encontradas en inventario: {len(refs_no_encontradas)}")
+                for ref in list(refs_no_encontradas)[:5]:
+                    log(f"    - {ref}")
+                if len(refs_no_encontradas) > 5:
+                    log(f"    ... y {len(refs_no_encontradas) - 5} más")
+            
+            # 🆕 12. GENERAR REPORTE EXCEL
+            log("")
+            log("Generando reporte de cambios...")
+            
+            try:
+                # Crear DataFrame con TODOS los cambios
+                df_reporte = pd.DataFrame(cambios_exitosos + cambios_no_encontrados)
+                
+                # Ordenar: primero exitosos, luego no encontrados
+                df_reporte['_ORDEN'] = df_reporte['ESTADO'].apply(
+                    lambda x: 0 if x == 'ACTUALIZADO' else 1
+                )
+                df_reporte = df_reporte.sort_values(['_ORDEN', 'REFERENCIA_ANTIGUA'])
+                df_reporte = df_reporte.drop(columns=['_ORDEN'])
+                
+                # Generar nombre del archivo
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                nombre_reporte = f"REPORTE_CAMBIOS_REFERENCIAS_{timestamp}.xlsx"
+                ruta_reporte = base_path / nombre_reporte
+                
+                # Guardar usando openpyxl para mejor formato
+                with pd.ExcelWriter(ruta_reporte, engine='openpyxl') as writer:
+                    # Hoja 1: Cambios exitosos
+                    if cambios_exitosos:
+                        df_exitosos = pd.DataFrame(cambios_exitosos)
+                        df_exitosos.to_excel(writer, sheet_name='REFERENCIAS ACTUALIZADAS', index=False)
+                    
+                    # Hoja 2: No encontradas
+                    if cambios_no_encontrados:
+                        df_no_encontrados = pd.DataFrame(cambios_no_encontrados)
+                        df_no_encontrados.to_excel(writer, sheet_name='NO ENCONTRADAS', index=False)
+                    
+                    # Hoja 3: Resumen
+                    resumen_data = {
+                        'MÉTRICA': [
+                            'Total referencias a cambiar',
+                            'Referencias actualizadas',
+                            'Referencias NO encontradas',
+                            'Fecha de proceso',
+                            'Archivo origen'
+                        ],
+                        'VALOR': [
+                            len(mapeo),
+                            reemplazos_realizados,
+                            len(refs_no_encontradas),
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            archivo_formato.name
+                        ]
+                    }
+                    df_resumen = pd.DataFrame(resumen_data)
+                    df_resumen.to_excel(writer, sheet_name='RESUMEN', index=False)
+                
+                # Ajustar anchos de columna
+                try:
+                    from openpyxl import load_workbook
+                    from openpyxl.styles import Font, PatternFill, Alignment
+                    
+                    wb_reporte = load_workbook(ruta_reporte)
+                    
+                    for sheet_name in wb_reporte.sheetnames:
+                        ws = wb_reporte[sheet_name]
+                        
+                        # Ajustar anchos
+                        for column in ws.columns:
+                            max_length = 0
+                            column_letter = column[0].column_letter
+                            
+                            for cell in column:
+                                try:
+                                    if len(str(cell.value)) > max_length:
+                                        max_length = len(str(cell.value))
+                                except:
+                                    pass
+                            
+                            adjusted_width = min(max_length + 2, 50)
+                            ws.column_dimensions[column_letter].width = adjusted_width
+                        
+                        # Formatear encabezados
+                        if ws.max_row > 0:
+                            for cell in ws[1]:
+                                cell.font = Font(bold=True, color="FFFFFF")
+                                cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                                cell.alignment = Alignment(horizontal="center", vertical="center")
+                        
+                        # Colorear estados
+                        if sheet_name in ['REFERENCIAS ACTUALIZADAS', 'NO ENCONTRADAS']:
+                            estado_col = None
+                            for idx, cell in enumerate(ws[1], start=1):
+                                if cell.value == 'ESTADO':
+                                    estado_col = idx
+                                    break
+                            
+                            if estado_col:
+                                for row in range(2, ws.max_row + 1):
+                                    cell = ws.cell(row=row, column=estado_col)
+                                    if cell.value == 'ACTUALIZADO':
+                                        cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                                        cell.font = Font(color="006100")
+                                    elif cell.value == 'NO ENCONTRADA EN INVENTARIO':
+                                        cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                                        cell.font = Font(color="9C0006")
+                    
+                    wb_reporte.save(ruta_reporte)
+                    
+                except Exception as e_formato:
+                    log(f"  ⚠️ No se pudo aplicar formato al reporte: {e_formato}")
+                
+                log(f"✅ Reporte generado: {nombre_reporte}")
+                log(f"   📁 Ubicación: {ruta_reporte}")
+                log(f"   📊 Hojas:")
+                log(f"      - REFERENCIAS ACTUALIZADAS: {len(cambios_exitosos)} registros")
+                log(f"      - NO ENCONTRADAS: {len(cambios_no_encontrados)} registros")
+                log(f"      - RESUMEN: Estadísticas del proceso")
+                
+            except Exception as e_reporte:
+                log(f"⚠️ Error al generar reporte: {e_reporte}")
+                import traceback
+                log(traceback.format_exc())
+            
+            log("="*70)
+            log("")
+            
+            return reemplazos_realizados
+            
+        except Exception as e:
+            log(f"⚠️ Error al procesar FORMATO CODIFICACIÓN: {e}")
+            import traceback
+            log(traceback.format_exc())
+            return 0
+        
+    except Exception as e:
+        log(f"⚠️ Error en actualización de referencias: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return 0
+
 def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     """Lee VALORIZADO* (header visible en fila 9)."""
     p = find_by_prefix(base_dir, prefix)
@@ -2244,13 +2651,49 @@ def main():
     p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
     log(f"Archivo encontrado: {p_inv.name}")
     log(f"Abriendo libro Excel: {p_inv}")
-    # ===== APERTURA DE ARCHIVO PRINCIPAL =====
-    log(f"Buscando archivo que coincida con: {PATRON_INV_FILE}")
-    p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
-    log(f"Archivo encontrado: {p_inv.name}")
-    log(f"Abriendo libro Excel: {p_inv}")
 
     excel, wb, saveinfo = excel_open(p_inv, password=PASS_INV)
+
+    # ===== NUEVO: ACTUALIZAR REFERENCIAS ANTES DE TODO =====
+    log("")
+    log("╔" + "="*68 + "╗")
+    log("║" + " FASE PREVIA: ACTUALIZANDO REFERENCIAS EN INVENTARIO ORIGINAL ".center(68) + "║")
+    log("╚" + "="*68 + "╝")
+    log("")
+
+    # Normalizar y abrir hoja INVENTARIO original
+    normalized_inv_name = normalize_sheet_name(wb, SHEET_INV_ORIG)
+
+    try:
+        ws_inv_orig_temp = wb.Worksheets(normalized_inv_name)
+    except Exception:
+        ws_inv_orig_temp = wb.Worksheets(1)
+        normalized_inv_name = ws_inv_orig_temp.Name
+
+    # EJECUTAR ACTUALIZACIÓN DE REFERENCIAS
+    try:
+        reemplazos = actualizar_referencias_inventario_original(
+            wb, 
+            ws_inv_orig_temp, 
+            BASE_PATH, 
+            PASS_INV
+        )
+        
+        if reemplazos > 0:
+            log("")
+            log("╔" + "="*68 + "╗")
+            log("║" + f" ✅ {reemplazos} REFERENCIAS ACTUALIZADAS EN INVENTARIO ORIGINAL ".center(68) + "║")
+            log("║" + " → Las referencias del ERP ahora coincidirán en los cruces ".center(68) + "║")
+            log("╚" + "="*68 + "╝")
+            log("")
+        else:
+            log("ℹ️  No se actualizaron referencias (archivo no encontrado o sin cambios)")
+            log("")
+            
+    except Exception as e:
+        log(f"⚠️  Error en actualización de referencias: {e}")
+        log("   → Continuando con el proceso normal...")
+        log("")
 
     # ===== ABRIR MATRIZ USD EN LA MISMA INSTANCIA DE EXCEL =====
     log("")
