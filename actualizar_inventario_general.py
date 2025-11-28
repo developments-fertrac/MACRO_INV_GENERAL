@@ -2158,6 +2158,61 @@ def ws_add_final_subtotals(ws, last_data_row: int, header_row: int, hdrn: dict):
         import traceback
         log(traceback.format_exc())
 
+def aplicar_formato_numero_columnas_a_b_inv_lista(ws, header_row: int):
+    """
+    Aplica formato número a las columnas A y B en INV LISTA PRECIOS
+    Replica el proceso manual: Seleccionar columna → Formato → Número
+    
+    Args:
+        ws: Hoja de Excel (COM object)
+        header_row: Fila donde están los encabezados
+    """
+    log(f"\n  🔢 Aplicando formato NÚMERO a columnas A y B (INV LISTA PRECIOS)...")
+    
+    try:
+        columnas_a_procesar = [1, 2]  # A = 1, B = 2
+        columnas_nombres = {1: "A (REFERENCIA FERTRAC)", 2: "B (REFERENCIA LISTA DE PRECIOS)"}
+        
+        for col_idx in columnas_a_procesar:
+            try:
+                # Verificar qué hay en el encabezado
+                header_val = ws.Cells(header_row, col_idx).Value
+                log(f"     → Columna {_col_num_to_letter(col_idx)}: '{header_val}'")
+                
+                # Seleccionar TODA la columna
+                columna = ws.Columns(col_idx)
+                
+                # Aplicar formato NÚMERO
+                columna.NumberFormat = "0"
+                
+                log(f"     ✓ Formato número aplicado a columna {_col_num_to_letter(col_idx)}")
+                
+                # Verificación: Leer primeras 5 celdas con datos
+                log(f"\n     🔍 Verificación (primeras 5 celdas):")
+                
+                primera_fila_datos = header_row + 1
+                
+                for i in range(5):
+                    fila = primera_fila_datos + i
+                    celda = ws.Cells(fila, col_idx)
+                    valor = celda.Value
+                    formato = celda.NumberFormat
+                    
+                    if valor is not None:
+                        tipo = type(valor).__name__
+                        log(f"        Fila {fila}: {valor} (tipo: {tipo}, formato: '{formato}')")
+                
+            except Exception as e:
+                log(f"     ❌ Error en columna {_col_num_to_letter(col_idx)}: {e}")
+        
+        log(f"     ✅ Columnas A y B formateadas como número")
+        
+    except Exception as e:
+        log(f"     ❌ Error al formatear columnas A y B: {e}")
+        import traceback
+        log(traceback.format_exc())
+    
+
 def _col_num_to_letter(col_num):
     """Convierte número de columna a letra."""
     letter = ''
@@ -4122,6 +4177,41 @@ def main():
         import traceback
         log(traceback.format_exc())
 
+    # ✅ NUEVO: Aplicar formato número a columnas A y B
+    log("Aplicando formato número a columnas A y B en INV LISTA PRECIOS...")
+    try:
+        # Buscar la hoja INV LISTA PRECIOS
+        ws_lp = None
+        target_norm = _norm(SHEET_INV_LISTA)
+        
+        for i in range(1, wb.Worksheets.Count + 1):
+            sheet_name = wb.Worksheets(i).Name
+            if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                ws_lp = wb.Worksheets(i)
+                log(f"  Hoja encontrada: '{sheet_name}'")
+                break
+        
+        if ws_lp is None:
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                    ws_lp = wb.Worksheets(i)
+                    log(f"  Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                    break
+        
+        if ws_lp:
+            # Obtener fila de encabezados
+            hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
+            
+            # Aplicar formato número a columnas A y B
+            aplicar_formato_numero_columnas_a_b_inv_lista(ws_lp, hr_lp)
+        else:
+            log("  ⚠️ No se encontró la hoja INV LISTA PRECIOS para aplicar formato número")
+            
+    except Exception as e:
+        log(f"  ❌ ERROR al aplicar formato número a columnas A y B: {e}")
+        import traceback
+        log(traceback.format_exc())
     
     # 18) GUARDADO COMO ARCHIVO NUEVO 
     log("Preparando guardado del archivo...")
