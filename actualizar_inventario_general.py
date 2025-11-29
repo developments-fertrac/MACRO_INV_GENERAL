@@ -468,6 +468,413 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
 
     return df.rename(columns=rename)
 
+
+# ============================================================================
+# FUNCIÓN: ACTUALIZAR REFERENCIAS DESDE FORMATO CODIFICACIÓN
+# ============================================================================
+
+def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path, password: str):
+    """
+    Actualiza las referencias en la hoja INVENTARIO original basándose en 
+    FORMATO CODIFICACIÓN.xlsx antes de empezar el proceso principal.
+    
+    Args:
+        wb: Workbook de Excel abierto
+        ws_inv_orig: Worksheet INVENTARIO original
+        base_path: Directorio base
+        password: Contraseña del archivo
+    
+    Returns:
+        int: Número de referencias actualizadas
+    """
+    try:
+        log("="*70)
+        log("ACTUALIZANDO REFERENCIAS DESDE FORMATO CODIFICACIÓN")
+        log("="*70)
+        
+        # 1. BUSCAR ARCHIVO FORMATO CODIFICACIÓN
+        archivo_formato = None
+        patron_formato = "FORMATO CODIFICACIÓN"
+        
+        for f in base_path.iterdir():
+            if f.is_file() and f.suffix.lower() in ('.xlsx', '.xlsm'):
+                if _norm(patron_formato) in _norm(f.name):
+                    archivo_formato = f
+                    log(f"Archivo encontrado: {f.name}")
+                    break
+        
+        if not archivo_formato:
+            log("⚠️ No se encontró archivo FORMATO CODIFICACIÓN - saltando actualización")
+            log("="*70)
+            return 0
+        
+        # 2. CARGAR REFERENCIAS A MODIFICAR
+        log("Cargando referencias a modificar...")
+        
+        try:
+            src_formato = open_as_excel_source(archivo_formato, PASSWORDS_TRY)
+            
+            # Intentar encontrar la hoja
+            xf = pd.ExcelFile(src_formato, engine="openpyxl")
+            sheet_codificacion = None
+            
+            for sn in xf.sheet_names:
+                sn_norm = _norm(sn)
+                if "modificacion" in sn_norm and "ref" in sn_norm:
+                    sheet_codificacion = sn
+                    log(f"Hoja encontrada: '{sn}'")
+                    break
+            
+            if not sheet_codificacion:
+                # Intentar variantes
+                for sn in xf.sheet_names:
+                    sn_norm = _norm(sn)
+                    if "cambio" in sn_norm or "actualizacion" in sn_norm:
+                        sheet_codificacion = sn
+                        log(f"Hoja encontrada (alternativa): '{sn}'")
+                        break
+            
+            if not sheet_codificacion:
+                log("⚠️ No se encontró hoja de modificaciones - usando primera hoja")
+                sheet_codificacion = xf.sheet_names[0]
+            
+            # Leer archivo (encabezados en fila 2, datos desde fila 3)
+            df_codificacion = pd.read_excel(
+                src_formato,
+                sheet_name=sheet_codificacion,
+                engine="openpyxl",
+                header=1  # Fila 2 (índice 1)
+            )
+            
+            log(f"Total de registros cargados: {len(df_codificacion)}")
+            
+            # 3. FILTRAR SOLO MODIFICADOS
+            # Buscar columna SISTEMA
+            col_sistema = None
+            for col in df_codificacion.columns:
+                if _norm(col) == _norm("SISTEMA"):
+                    col_sistema = col
+                    break
+            
+            if not col_sistema:
+                log("⚠️ No se encontró columna SISTEMA")
+                return 0
+            
+            # Filtrar
+            df_modificaciones = df_codificacion[
+                df_codificacion[col_sistema].astype(str).str.strip().str.upper() == 'MODIFICADO'
+            ].copy()
+            
+            log(f"Registros con SISTEMA='MODIFICADO': {len(df_modificaciones)}")
+            
+            if len(df_modificaciones) == 0:
+                log("No hay referencias para modificar")
+                log("="*70)
+                return 0
+            
+            # 4. BUSCAR COLUMNAS DE REFERENCIAS
+            col_ref_antigua = None
+            col_ref_nueva = None
+            
+            for col in df_modificaciones.columns:
+                col_norm = _norm(col)
+                if "ref" in col_norm and "fertrac" in col_norm and "modificar" in col_norm:
+                    col_ref_antigua = col
+                elif "ref" in col_norm and "fertrac" in col_norm and "nueva" in col_norm:
+                    col_ref_nueva = col
+            
+            if not col_ref_antigua or not col_ref_nueva:
+                log(f"⚠️ No se encontraron columnas de referencias")
+                log(f"   Columnas disponibles: {list(df_modificaciones.columns)}")
+                return 0
+            
+            log(f"Columna antigua: '{col_ref_antigua}'")
+            log(f"Columna nueva: '{col_ref_nueva}'")
+            
+            # 5. CREAR DICCIONARIO DE MAPEO
+            mapeo = {}
+            for _, row in df_modificaciones.iterrows():
+                ref_antigua = str(row[col_ref_antigua]).strip()
+                ref_nueva = str(row[col_ref_nueva]).strip()
+                
+                # Validar que ambas sean válidas
+                if (ref_antigua and ref_antigua not in ('nan', 'None', '', 'N/A', '-') and
+                    ref_nueva and ref_nueva not in ('nan', 'None', '', 'N/A', '-', 'OK')):
+                    
+                    # Normalizar ambas referencias
+                    ref_antigua_norm = to_num_str(ref_antigua)
+                    ref_nueva_norm = to_num_str(ref_nueva)
+                    
+                    if ref_antigua_norm and ref_nueva_norm:
+                        mapeo[ref_antigua_norm] = ref_nueva_norm
+            
+            log(f"Mapa de reemplazos creado: {len(mapeo)} referencias válidas")
+            
+            if len(mapeo) == 0:
+                log("No hay referencias válidas para reemplazar")
+                log("="*70)
+                return 0
+            
+            # Mostrar muestra
+            log("")
+            log("Muestra de cambios a aplicar:")
+            for i, (ref_ant, ref_nue) in enumerate(list(mapeo.items())[:5]):
+                log(f"  {ref_ant:40} → {ref_nue}")
+            if len(mapeo) > 5:
+                log(f"  ... y {len(mapeo) - 5} más")
+            
+            # 6. ENCONTRAR COLUMNA REFERENCIA EN INVENTARIO ORIGINAL
+            log("")
+            log("Buscando columna REFERENCIA en INVENTARIO original...")
+            
+            # ✅ USANDO ws_headers_smart que retorna 3 valores
+            hr_orig, hdr_orig, hdrn_orig = ws_headers_smart(
+                ws_inv_orig, 
+                HEADER_ROW_INV,
+                ["REFERENCIA", "REFERENCIA FERTRAC"]
+            )
+            
+            ref_col_idx = hdrn_orig.get(_norm("REFERENCIA")) or \
+                         hdrn_orig.get(_norm("REFERENCIA FERTRAC")) or \
+                         find_reference_col_idx(hdrn_orig, ws_inv_orig, hr_orig)
+            
+            log(f"Columna REFERENCIA encontrada: índice {ref_col_idx}")
+            
+            # 7. DETERMINAR ÚLTIMA FILA
+            last_row_orig = ws_last_row(ws_inv_orig, ref_col_idx, HEADER_ROW_INV)
+            
+            # Ajustar por pivots
+            pivot_top = ws_first_pivot_row(ws_inv_orig)
+            if pivot_top and pivot_top > HEADER_ROW_INV:
+                last_row_orig = min(last_row_orig, pivot_top - 1)
+            
+            log(f"Rango a procesar: filas {HEADER_ROW_INV + 1} a {last_row_orig}")
+            
+            # 8. LEER TODAS LAS REFERENCIAS
+            log("")
+            log("Leyendo referencias actuales...")
+            
+            referencias_actuales = read_range_as_array(
+                ws_inv_orig, 
+                HEADER_ROW_INV + 1, 
+                last_row_orig, 
+                ref_col_idx
+            )
+            
+            # Normalizar
+            referencias_norm = [to_num_str(r) for r in referencias_actuales]
+            
+            log(f"Total de referencias leídas: {len(referencias_norm)}")
+            
+            # 9. REALIZAR REEMPLAZOS
+            log("")
+            log("Aplicando reemplazos...")
+            
+            nuevas_referencias = []
+            reemplazos_realizados = 0
+            referencias_actualizadas = set()
+            
+            # 🆕 REGISTRO DETALLADO PARA REPORTE
+            cambios_exitosos = []
+            
+            for i, ref_norm in enumerate(referencias_norm):
+                if ref_norm in mapeo:
+                    ref_nueva = mapeo[ref_norm]
+                    nuevas_referencias.append(ref_nueva)
+                    reemplazos_realizados += 1
+                    referencias_actualizadas.add(ref_norm)
+                    
+                    # 🆕 Guardar para reporte
+                    cambios_exitosos.append({
+                        'FILA_EXCEL': HEADER_ROW_INV + 1 + i,
+                        'REFERENCIA_ANTIGUA': referencias_actuales[i],  # Original sin normalizar
+                        'REFERENCIA_NUEVA': ref_nueva,
+                        'ESTADO': 'ACTUALIZADO'
+                    })
+                    
+                    if reemplazos_realizados <= 5:
+                        log(f"  Fila {HEADER_ROW_INV + 1 + i}: {ref_norm:40} → {ref_nueva}")
+                    elif reemplazos_realizados == 6:
+                        log(f"  ... procesando más reemplazos ...")
+                else:
+                    nuevas_referencias.append(referencias_actuales[i])
+            
+            log(f"Reemplazos realizados: {reemplazos_realizados}")
+            
+            # 10. ESCRIBIR DE VUELTA
+            if reemplazos_realizados > 0:
+                log("")
+                log("Escribiendo referencias actualizadas...")
+                
+                write_range_as_array(
+                    ws_inv_orig,
+                    HEADER_ROW_INV + 1,
+                    ref_col_idx,
+                    nuevas_referencias
+                )
+                
+                log(f"✅ Referencias actualizadas en INVENTARIO original")
+            else:
+                log("No se realizaron cambios")
+            
+            # 11. VERIFICAR REFERENCIAS NO ENCONTRADAS
+            refs_no_encontradas = set(mapeo.keys()) - referencias_actualizadas
+            
+            # 🆕 REGISTRO DE NO ENCONTRADAS PARA REPORTE
+            cambios_no_encontrados = []
+            for ref_antigua in refs_no_encontradas:
+                ref_nueva = mapeo[ref_antigua]
+                cambios_no_encontrados.append({
+                    'FILA_EXCEL': 'N/A',
+                    'REFERENCIA_ANTIGUA': ref_antigua,
+                    'REFERENCIA_NUEVA': ref_nueva,
+                    'ESTADO': 'NO ENCONTRADA EN INVENTARIO'
+                })
+            
+            if refs_no_encontradas:
+                log("")
+                log(f"⚠️ Referencias NO encontradas en inventario: {len(refs_no_encontradas)}")
+                for ref in list(refs_no_encontradas)[:5]:
+                    log(f"    - {ref}")
+                if len(refs_no_encontradas) > 5:
+                    log(f"    ... y {len(refs_no_encontradas) - 5} más")
+            
+            # 🆕 12. GENERAR REPORTE EXCEL
+            log("")
+            log("Generando reporte de cambios...")
+            
+            try:
+                # Crear DataFrame con TODOS los cambios
+                df_reporte = pd.DataFrame(cambios_exitosos + cambios_no_encontrados)
+                
+                # Ordenar: primero exitosos, luego no encontrados
+                df_reporte['_ORDEN'] = df_reporte['ESTADO'].apply(
+                    lambda x: 0 if x == 'ACTUALIZADO' else 1
+                )
+                df_reporte = df_reporte.sort_values(['_ORDEN', 'REFERENCIA_ANTIGUA'])
+                df_reporte = df_reporte.drop(columns=['_ORDEN'])
+                
+                # Generar nombre del archivo
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                nombre_reporte = f"REPORTE_CAMBIOS_REFERENCIAS_{timestamp}.xlsx"
+                ruta_reporte = base_path / nombre_reporte
+                
+                # Guardar usando openpyxl para mejor formato
+                with pd.ExcelWriter(ruta_reporte, engine='openpyxl') as writer:
+                    # Hoja 1: Cambios exitosos
+                    if cambios_exitosos:
+                        df_exitosos = pd.DataFrame(cambios_exitosos)
+                        df_exitosos.to_excel(writer, sheet_name='REFERENCIAS ACTUALIZADAS', index=False)
+                    
+                    # Hoja 2: No encontradas
+                    if cambios_no_encontrados:
+                        df_no_encontrados = pd.DataFrame(cambios_no_encontrados)
+                        df_no_encontrados.to_excel(writer, sheet_name='NO ENCONTRADAS', index=False)
+                    
+                    # Hoja 3: Resumen
+                    resumen_data = {
+                        'MÉTRICA': [
+                            'Total referencias a cambiar',
+                            'Referencias actualizadas',
+                            'Referencias NO encontradas',
+                            'Fecha de proceso',
+                            'Archivo origen'
+                        ],
+                        'VALOR': [
+                            len(mapeo),
+                            reemplazos_realizados,
+                            len(refs_no_encontradas),
+                            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            archivo_formato.name
+                        ]
+                    }
+                    df_resumen = pd.DataFrame(resumen_data)
+                    df_resumen.to_excel(writer, sheet_name='RESUMEN', index=False)
+                
+                # Ajustar anchos de columna
+                try:
+                    from openpyxl import load_workbook
+                    from openpyxl.styles import Font, PatternFill, Alignment
+                    
+                    wb_reporte = load_workbook(ruta_reporte)
+                    
+                    for sheet_name in wb_reporte.sheetnames:
+                        ws = wb_reporte[sheet_name]
+                        
+                        # Ajustar anchos
+                        for column in ws.columns:
+                            max_length = 0
+                            column_letter = column[0].column_letter
+                            
+                            for cell in column:
+                                try:
+                                    if len(str(cell.value)) > max_length:
+                                        max_length = len(str(cell.value))
+                                except:
+                                    pass
+                            
+                            adjusted_width = min(max_length + 2, 50)
+                            ws.column_dimensions[column_letter].width = adjusted_width
+                        
+                        # Formatear encabezados
+                        if ws.max_row > 0:
+                            for cell in ws[1]:
+                                cell.font = Font(bold=True, color="FFFFFF")
+                                cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                                cell.alignment = Alignment(horizontal="center", vertical="center")
+                        
+                        # Colorear estados
+                        if sheet_name in ['REFERENCIAS ACTUALIZADAS', 'NO ENCONTRADAS']:
+                            estado_col = None
+                            for idx, cell in enumerate(ws[1], start=1):
+                                if cell.value == 'ESTADO':
+                                    estado_col = idx
+                                    break
+                            
+                            if estado_col:
+                                for row in range(2, ws.max_row + 1):
+                                    cell = ws.cell(row=row, column=estado_col)
+                                    if cell.value == 'ACTUALIZADO':
+                                        cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                                        cell.font = Font(color="006100")
+                                    elif cell.value == 'NO ENCONTRADA EN INVENTARIO':
+                                        cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                                        cell.font = Font(color="9C0006")
+                    
+                    wb_reporte.save(ruta_reporte)
+                    
+                except Exception as e_formato:
+                    log(f"  ⚠️ No se pudo aplicar formato al reporte: {e_formato}")
+                
+                log(f"✅ Reporte generado: {nombre_reporte}")
+                log(f"   📁 Ubicación: {ruta_reporte}")
+                log(f"   📊 Hojas:")
+                log(f"      - REFERENCIAS ACTUALIZADAS: {len(cambios_exitosos)} registros")
+                log(f"      - NO ENCONTRADAS: {len(cambios_no_encontrados)} registros")
+                log(f"      - RESUMEN: Estadísticas del proceso")
+                
+            except Exception as e_reporte:
+                log(f"⚠️ Error al generar reporte: {e_reporte}")
+                import traceback
+                log(traceback.format_exc())
+            
+            log("="*70)
+            log("")
+            
+            return reemplazos_realizados
+            
+        except Exception as e:
+            log(f"⚠️ Error al procesar FORMATO CODIFICACIÓN: {e}")
+            import traceback
+            log(traceback.format_exc())
+            return 0
+        
+    except Exception as e:
+        log(f"⚠️ Error en actualización de referencias: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return 0
+    
 def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     """Lee VALORIZADO* (header visible en fila 9)."""
     p = find_by_prefix(base_dir, prefix)
@@ -2239,18 +2646,54 @@ def main():
     exist_map = df_val_gen.set_index("__REF_INT__")["__EXIST_CALC__"]
 
 
-    # 2) Abrir libro PLANTILLA
+     # 2) Abrir libro PLANTILLA
     log(f"Buscando archivo que coincida con: {PATRON_INV_FILE}")
     p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
     log(f"Archivo encontrado: {p_inv.name}")
     log(f"Abriendo libro Excel: {p_inv}")
-    # ===== APERTURA DE ARCHIVO PRINCIPAL =====
-    log(f"Buscando archivo que coincida con: {PATRON_INV_FILE}")
-    p_inv = find_by_prefix(BASE_PATH, PATRON_INV_FILE)
-    log(f"Archivo encontrado: {p_inv.name}")
-    log(f"Abriendo libro Excel: {p_inv}")
-
     excel, wb, saveinfo = excel_open(p_inv, password=PASS_INV)
+
+    # ===== NUEVO: ACTUALIZAR REFERENCIAS ANTES DE TODO =====
+    log("")
+    log("╔" + "="*68 + "╗")
+    log("║" + " FASE PREVIA: ACTUALIZANDO REFERENCIAS EN INVENTARIO ORIGINAL ".center(68) + "║")
+    log("╚" + "="*68 + "╝")
+    log("")
+
+    # Normalizar y abrir hoja INVENTARIO original
+    normalized_inv_name = normalize_sheet_name(wb, SHEET_INV_ORIG)
+
+    try:
+        ws_inv_orig_temp = wb.Worksheets(normalized_inv_name)
+    except Exception:
+        ws_inv_orig_temp = wb.Worksheets(1)
+        normalized_inv_name = ws_inv_orig_temp.Name
+
+    # EJECUTAR ACTUALIZACIÓN DE REFERENCIAS
+    try:
+        reemplazos = actualizar_referencias_inventario_original(
+            wb, 
+            ws_inv_orig_temp, 
+            BASE_PATH, 
+            PASS_INV
+        )
+        
+        if reemplazos > 0:
+            log("")
+            log("╔" + "="*68 + "╗")
+            log("║" + f" ✅ {reemplazos} REFERENCIAS ACTUALIZADAS EN INVENTARIO ORIGINAL ".center(68) + "║")
+            log("║" + " → Las referencias del ERP ahora coincidirán en los cruces ".center(68) + "║")
+            log("╚" + "="*68 + "╝")
+            log("")
+        else:
+            log("ℹ️  No se actualizaron referencias (archivo no encontrado o sin cambios)")
+            log("")
+            
+    except Exception as e:
+        log(f"⚠️  Error en actualización de referencias: {e}")
+        log("   → Continuando con el proceso normal...")
+        log("")
+
 
     # ===== ABRIR MATRIZ USD EN LA MISMA INSTANCIA DE EXCEL =====
     log("")
@@ -3202,7 +3645,7 @@ def main():
         import traceback
         log(traceback.format_exc())
 
-# 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
+    # 14) Llenar REFERENCIA FERTRAC en INV LISTA PRECIOS
     log("Llenando REFERENCIA FERTRAC en INV LISTA PRECIOS desde INVENTARIO COPIA...")
     try:
         ws_lp = None
@@ -3234,38 +3677,89 @@ def main():
                 
                 log(f"{len(referencias_copia)} referencias a copiar")
                 
-                slash_count = 0
-                numeric_count = 0
+                # APLICAR CORRECCIÓN PARA REFERENCIAS CON "/"
+                has_slash = any("/" in str(v) for v in referencias_copia if v not in (None, "", "None"))
                 
-                # Escribir celda por celda con manejo especial
-                for idx, v in enumerate(referencias_copia):
-                    cell = ws_lp.Cells(hr_lp + 1 + idx, ref_fertrac_idx)
+                if has_slash:
+
+                    last_row_lp = hr_lp + len(referencias_copia)
                     
-                    if v in (None, "", "None"):
-                        cell.Value = ""
-                    elif "/" in str(v):
-                        # CLAVE: Formato texto ANTES y usar Value2 o fórmula texto
-                        cell.NumberFormat = "@"
-                        cell.Formula = '="' + str(v).replace('"', '""') + '"'
-                        cell.HorizontalAlignment = -4131  # xlLeft
-                        try:
-                            cell.Errors.Item(1).Ignore = True
-                        except:
-                            pass
-                        slash_count += 1
-                    else:
-                        # Intentar como número
-                        try:
-                            num_val = float(str(v).strip())
-                            cell.NumberFormat = "0"
-                            cell.Value = num_val
-                            numeric_count += 1
-                        except:
-                            cell.NumberFormat = "@"
-                            cell.Value2 = str(v)
-                
-                log(f"Valores escritos: {slash_count} con '/' (texto), {numeric_count} numéricos")
-                log(f" {len(referencias_copia)} referencias copiadas")
+                    # Establecer formato de TEXTO primero
+                    rng = ws_lp.Range(
+                        ws_lp.Cells(hr_lp + 1, ref_fertrac_idx),
+                        ws_lp.Cells(last_row_lp, ref_fertrac_idx)
+                    )
+                    
+                    rng.NumberFormat = "@"  # Formato TEXTO para evitar división
+                    log(f"Formato de texto aplicado")
+                    
+                    # Convertir valores apropiadamente
+                    try:
+                        converted_values = []
+                        slash_count = 0
+                        numeric_count = 0
+                        
+                        for v in referencias_copia:
+                            if v in (None, "", "None"):
+                                converted_values.append([""])
+                            elif "/" in str(v):
+                                # Mantener como TEXTO si tiene "/"
+                                converted_values.append([str(v)])
+                                slash_count += 1
+                            elif not str(v).replace(".", "").replace("-", "").isdigit():
+                                # Mantener como texto si no es numérico
+                                converted_values.append([str(v)])
+                            else:
+                                # Convertir a número si es numérico puro
+                                try:
+                                    converted_values.append([float(v)])
+                                    numeric_count += 1
+                                except:
+                                    converted_values.append([str(v)])
+                        
+                        rng.Value = converted_values
+                        log(f"Valores escritos: {slash_count} con '/', {numeric_count} numéricos")
+                        
+                    except Exception as e:
+                        log(f"     ⚠️  Aviso en conversión: {e}")
+                        # Fallback: escribir directamente
+                        write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
+                    
+                    # MANTENER formato de texto para preservar valores con "/"
+                    # No cambiar a formato numérico porque convertiría "/" en división
+                    rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
+                    log(f"Formato de texto mantenido con alineación izquierda")
+                    
+                    # Ignorar advertencias de "número almacenado como texto"
+                    try:
+                        for i in range(1, 8):
+                            try:
+                                rng.Errors.Item(i).Ignore = True
+                            except:
+                                pass
+                        ws_lp.Parent.Application.ErrorCheckingOptions.NumberAsText = False
+                        log(f"Advertencias de Excel desactivadas")
+                    except Exception as e:
+                        log(f"   ⚠️  No se pudieron desactivar advertencias: {e}")
+                    
+                    log(f" {len(referencias_copia)} referencias copiadas con formato especial")
+                    
+                else:
+                    # Si NO hay referencias con "/", usar el método normal
+                    log(f"  ℹ️  No se detectaron referencias con '/' - usando método estándar")
+                    last_row_lp = hr_lp + len(referencias_copia)
+                    write_range_as_array(ws_lp, hr_lp + 1, ref_fertrac_idx, referencias_copia)
+                    
+                    # Aplicar formato numérico
+                    try:
+                        rng = ws_lp.Range(ws_lp.Cells(hr_lp + 1, ref_fertrac_idx), 
+                                         ws_lp.Cells(last_row_lp, ref_fertrac_idx))
+                        rng.NumberFormat = "0"
+                        log(f"Formato numérico '0' aplicado")
+                    except Exception as e:
+                        log(f"     ⚠️  No se pudo aplicar formato numérico: {e}")
+                    
+                    log(f"   {len(referencias_copia)} referencias copiadas")
                 
             else:
                 log("  ⚠️  No se encontró columna REFERENCIA FERTRAC")
@@ -3280,9 +3774,11 @@ def main():
     # 15) Llenar REFERENCIA LISTA DE PRECIOS en INV LISTA PRECIOS desde MATRIZ USD
     log("Llenando REFERENCIA LISTA DE PRECIOS desde MATRIZ USD...")
     try:
+        # Verificar que tenemos datos de Matriz USD
         if len(matriz_map_ref_lista) == 0:
             log("  ⚠ No hay datos de REFERENCIA LISTA DE PRECIOS en Matriz USD - saltando")
         else:
+            # Buscar la hoja INV LISTA PRECIOS
             ws_lp = None
             target_norm = _norm(SHEET_INV_LISTA)
             
@@ -3302,8 +3798,10 @@ def main():
                         break
             
             if ws_lp:
+                # Obtener encabezados de INV LISTA PRECIOS
                 hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(ws_lp, HEADER_ROW_INV_LISTA, ["REFERENCIA FERTRAC"])
                 
+                # Buscar columnas necesarias
                 ref_fertrac_idx = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
                 ref_lista_idx = hdrn_lp.get(_norm("REFERENCIA LISTA DE PRECIOS")) or \
                                hdrn_lp.get(_norm("REFERENCIA LISTA")) or \
@@ -3319,6 +3817,7 @@ def main():
                     log(f" - REFERENCIA FERTRAC: índice {ref_fertrac_idx}")
                     log(f" - REFERENCIA LISTA DE PRECIOS: índice {ref_lista_idx}")
                     
+                    # Determinar última fila con datos
                     last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx, hr_lp)
                     pivot_top_lp = ws_first_pivot_row(ws_lp)
                     if pivot_top_lp and pivot_top_lp > hr_lp:
@@ -3326,57 +3825,112 @@ def main():
                     
                     log(f"Procesando {last_row_lp - hr_lp} filas...")
                     
+                    # Leer REFERENCIA FERTRAC de INV LISTA PRECIOS
                     refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx)
                     refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
                     
+                    # Cruzar con MATRIZ USD para obtener REFERENCIA LISTA DE PRECIOS
                     refs_lista_precios = []
                     matched = 0
 
                     for ref_fertrac in refs_fertrac_lp_norm:
                         if ref_fertrac and ref_fertrac in matriz_map_ref_lista:
                             ref_lista_val = matriz_map_ref_lista[ref_fertrac]
+                            # Validar que no esté vacío (PERO ACEPTAR "0" como valor válido)
                             if ref_lista_val is not None and str(ref_lista_val).strip() not in ("", "None", "nan"):
+                                #  ACEPTA "0" como valor válido
                                 refs_lista_precios.append(str(ref_lista_val).strip())
                                 matched += 1
                             else:
-                                refs_lista_precios.append("")
+                                refs_lista_precios.append("0")  # ← CAMBIADO: escribe 0 si el valor en matriz es inválido
                         else:
-                            refs_lista_precios.append("")
+                            refs_lista_precios.append("0")  # ← CAMBIADO: escribe 0 si NO encuentra coincidencia
+                            
+                    # APLICAR CORRECCIÓN PARA REFERENCIAS CON "/" en REFERENCIA LISTA DE PRECIOS
+                    has_slash = any("/" in str(v) for v in refs_lista_precios if v not in (None, "", "None"))
                     
-                    slash_count = 0
-                    numeric_count = 0
-                    
-                    # Escribir celda por celda con manejo especial
-                    for idx, v in enumerate(refs_lista_precios):
-                        cell = ws_lp.Cells(hr_lp + 1 + idx, ref_lista_idx)
+                    if has_slash:
+                        last_row_ref_lista = hr_lp + len(refs_lista_precios)
                         
-                        if v in (None, "", "None"):
-                            cell.Value = ""
-                        elif "/" in str(v):
-                            # CLAVE: Formato texto ANTES y usar Value2
-                            cell.NumberFormat = "@"
-                            cell.Formula = '="' + str(v).replace('"', '""') + '"'
-                            cell.HorizontalAlignment = -4131  # xlLeft
-                            try:
-                                cell.Errors.Item(1).Ignore = True
-                            except:
-                                pass
-                            slash_count += 1
-                        else:
-                            # Intentar como número
-                            try:
-                                num_val = float(str(v).strip())
-                                cell.NumberFormat = "0"
-                                cell.Value = num_val
-                                numeric_count += 1
-                            except:
-                                cell.NumberFormat = "@"
-                                cell.Value2 = str(v)
+                        # Establecer formato de TEXTO primero
+                        rng = ws_lp.Range(
+                            ws_lp.Cells(hr_lp + 1, ref_lista_idx),
+                            ws_lp.Cells(last_row_ref_lista, ref_lista_idx)
+                        )
+                        
+                        rng.NumberFormat = "@"  # Formato TEXTO para evitar división
+                        log(f"Formato de texto aplicado en REFERENCIA LISTA DE PRECIOS")
+                        
+                        # Convertir valores apropiadamente
+                        try:
+                            converted_values = []
+                            slash_count = 0
+                            numeric_count = 0
+                            
+                            for v in refs_lista_precios:
+                                if v in (None, "", "None"):
+                                    converted_values.append([""])
+                                elif "/" in str(v):
+                                    # Mantener como TEXTO si tiene "/"
+                                    converted_values.append([str(v)])
+                                    slash_count += 1
+                                elif not str(v).replace(".", "").replace("-", "").isdigit():
+                                    # Mantener como texto si no es numérico
+                                    converted_values.append([str(v)])
+                                else:
+                                    # Convertir a número si es numérico puro
+                                    try:
+                                        converted_values.append([float(v)])
+                                        numeric_count += 1
+                                    except:
+                                        converted_values.append([str(v)])
+                            
+                            rng.Value = converted_values
+                            log(f"Valores escritos en REFERENCIA LISTA DE PRECIOS: {slash_count} con '/', {numeric_count} numéricos")
+                            
+                        except Exception as e:
+                            log(f"     ⚠️  Aviso en conversión: {e}")
+                            # Fallback: escribir directamente
+                            write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                        
+                        # MANTENER formato de texto para preservar valores con "/"
+                        # No cambiar a formato numérico porque convertiría "/" en división
+                        rng.HorizontalAlignment = -4131  # xlLeft (alineación izquierda)
+                        log(f"Formato de texto mantenido con alineación izquierda en REFERENCIA LISTA DE PRECIOS")
+                        
+                        # Ignorar advertencias de "número almacenado como texto"
+                        try:
+                            for i in range(1, 8):
+                                try:
+                                    rng.Errors.Item(i).Ignore = True
+                                except:
+                                    pass
+                            ws_lp.Parent.Application.ErrorCheckingOptions.NumberAsText = False
+                            log(f"Advertencias de Excel desactivadas para REFERENCIA LISTA DE PRECIOS")
+                        except Exception as e:
+                            log(f"   ⚠️  No se pudieron desactivar advertencias: {e}")
+                        
+                        log(f" {len(refs_lista_precios)} referencias copiadas con formato especial")
+                        
+                    else:
+                        # Si NO hay referencias con "/", usar el método normal
+                        log(f"  ℹ️  No se detectaron referencias con '/' en REFERENCIA LISTA DE PRECIOS - usando método estándar")
+                        write_range_as_array(ws_lp, hr_lp + 1, ref_lista_idx, refs_lista_precios)
+                        
+                        # Aplicar formato numérico
+                        try:
+                            last_row_ref_lista = hr_lp + len(refs_lista_precios)
+                            rng = ws_lp.Range(ws_lp.Cells(hr_lp + 1, ref_lista_idx), 
+                                             ws_lp.Cells(last_row_ref_lista, ref_lista_idx))
+                            rng.NumberFormat = "0"
+                            log(f"Formato numérico '0' aplicado en REFERENCIA LISTA DE PRECIOS")
+                        except Exception as e:
+                            log(f"     ⚠️  No se pudo aplicar formato numérico: {e}")
                     
                     log(f"REFERENCIA LISTA DE PRECIOS actualizada:")
                     log(f" - Total procesado: {len(refs_lista_precios)}")
                     log(f" - Coincidencias encontradas: {matched}")
-                    log(f" - Con '/': {slash_count} (texto), Numéricos: {numeric_count}")
+                    log(f" - Sin coincidencia: {len(refs_lista_precios) - matched}")
                     
             else:
                 log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
