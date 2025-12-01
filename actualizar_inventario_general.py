@@ -3825,9 +3825,9 @@ def main():
                                 refs_lista_precios.append(val_limpio)
                                 matched += 1
                             else:
-                                refs_lista_precios.append("")
+                                refs_lista_precios.append("0")
                         else:
-                            refs_lista_precios.append("")
+                            refs_lista_precios.append("0")
                     
                     # 🔥 APLICAR FORMATO DE TEXTO ANTES DE ESCRIBIR
                     log("⚙️  Aplicando formato de TEXTO a REFERENCIA LISTA DE PRECIOS...")
