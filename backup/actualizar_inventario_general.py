@@ -3528,72 +3528,72 @@ def main():
         distribucion
     )
 
-    #Eliminar registros con LINEA COPIA indeterminada
-    last_row = eliminar_registros_linea_copia_indeterminada(
-        ws_inv_copia, 
-        start_data_row, 
-        last_row, 
-        ref_col_idx, 
-        hdrn_copia
-    )
+    # #Eliminar registros con LINEA COPIA indeterminada
+    # last_row = eliminar_registros_linea_copia_indeterminada(
+    #     ws_inv_copia, 
+    #     start_data_row, 
+    #     last_row, 
+    #     ref_col_idx, 
+    #     hdrn_copia
+    # )
 
     # ELIMINAR FILAS CON LIDER LINEA VACÍO
 
-    log("ELIMINANDO FILAS CON LIDER LINEA VACÍO")
-    try:
-        col_lider_linea = hdrn_copia.get(_norm("LIDER LINEA"))
+    # log("ELIMINANDO FILAS CON LIDER LINEA VACÍO")
+    # try:
+    #     col_lider_linea = hdrn_copia.get(_norm("LIDER LINEA"))
         
-        if col_lider_linea:
-            # Actualizar last_row antes de procesar
-            last_row = ws_last_row(ws_inv_copia, ref_col_idx, start_data_row - 1)
-            log(f"Analizando {last_row - start_data_row + 1} filas...")
+    #     if col_lider_linea:
+    #         # Actualizar last_row antes de procesar
+    #         last_row = ws_last_row(ws_inv_copia, ref_col_idx, start_data_row - 1)
+    #         log(f"Analizando {last_row - start_data_row + 1} filas...")
             
-            # Leer valores de LIDER LINEA
-            filas_a_eliminar = []
-            for row_idx in range(start_data_row, last_row + 1):
-                try:
-                    valor_lider = ws_inv_copia.Cells(row_idx, col_lider_linea).Value
-                    # Verificar si está vacío (None, "", espacios, etc.)
-                    if not valor_lider or (isinstance(valor_lider, str) and not valor_lider.strip()):
-                        filas_a_eliminar.append(row_idx)
-                except Exception:
-                    continue
+    #         # Leer valores de LIDER LINEA
+    #         filas_a_eliminar = []
+    #         for row_idx in range(start_data_row, last_row + 1):
+    #             try:
+    #                 valor_lider = ws_inv_copia.Cells(row_idx, col_lider_linea).Value
+    #                 # Verificar si está vacío (None, "", espacios, etc.)
+    #                 if not valor_lider or (isinstance(valor_lider, str) and not valor_lider.strip()):
+    #                     filas_a_eliminar.append(row_idx)
+    #             except Exception:
+    #                 continue
             
-            if filas_a_eliminar:
-                log(f"  Encontradas {len(filas_a_eliminar)} filas con LIDER LINEA vacío")
+    #         if filas_a_eliminar:
+    #             log(f"  Encontradas {len(filas_a_eliminar)} filas con LIDER LINEA vacío")
                 
-                # Eliminar filas de abajo hacia arriba para mantener índices correctos
-                eliminadas = 0
-                for row_idx in reversed(filas_a_eliminar):
-                    try:
-                        ws_inv_copia.Rows(row_idx).Delete()
-                        eliminadas += 1
-                    except Exception as e:
-                        log(f"  ⚠ Error al eliminar fila {row_idx}: {e}")
+    #             # Eliminar filas de abajo hacia arriba para mantener índices correctos
+    #             eliminadas = 0
+    #             for row_idx in reversed(filas_a_eliminar):
+    #                 try:
+    #                     ws_inv_copia.Rows(row_idx).Delete()
+    #                     eliminadas += 1
+    #                 except Exception as e:
+    #                     log(f"  ⚠ Error al eliminar fila {row_idx}: {e}")
                 
-                # Actualizar last_row
-                last_row = last_row - eliminadas
-                log(f"  ✓ {eliminadas} filas eliminadas. Nuevo rango: {start_data_row} a {last_row} ({last_row - start_data_row + 1} registros)")
-            else:
-                log("  ℹ No se encontraron filas con LIDER LINEA vacío")
-        else:
-            log("  ⚠ Columna 'LIDER LINEA' no encontrada")
+    #             # Actualizar last_row
+    #             last_row = last_row - eliminadas
+    #             log(f"  ✓ {eliminadas} filas eliminadas. Nuevo rango: {start_data_row} a {last_row} ({last_row - start_data_row + 1} registros)")
+    #         else:
+    #             log("  ℹ No se encontraron filas con LIDER LINEA vacío")
+    #     else:
+    #         log("  ⚠ Columna 'LIDER LINEA' no encontrada")
             
-    except Exception as e:
-        log(f"❌ ERROR al eliminar filas con LIDER LINEA vacío: {e}")
-        import traceback
-        log(traceback.format_exc())
+    # except Exception as e:
+    #     log(f"❌ ERROR al eliminar filas con LIDER LINEA vacío: {e}")
+    #     import traceback
+    #     log(traceback.format_exc())
     
-    log("")
+    # log("")
     
-    last_row = procesar_existencias_negativas_y_cero(
-        ws_inv_copia,
-        start_data_row,
-        last_row,
-        ref_col_idx,
-        hdrn_copia,
-        BASE_PATH
-    )
+    # last_row = procesar_existencias_negativas_y_cero(
+    #     ws_inv_copia,
+    #     start_data_row,
+    #     last_row,
+    #     ref_col_idx,
+    #     hdrn_copia,
+    #     BASE_PATH
+    # )
 
 
     # LLENAR COSTO PROMEDIO 

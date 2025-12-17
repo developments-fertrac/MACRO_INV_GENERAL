@@ -18,8 +18,8 @@ warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 BASE_PATH = Path(__file__).resolve().parent
 # BASE_PATH = Path(r"C:\Users\jperez\Desktop\Tecnologia\Inventario General")
 
-PASS_INV = "Compras2025"
-PASSWORDS_TRY = ["Compras2025", "Compras2026"]
+PASS_INV = "Compras2027"
+PASSWORDS_TRY = ["Compras2026", "Compras2027"]
 
 # Nombre del archivo de salida
 OUTPUT_BASENAME = "2025 INVENTARIO GENERAL ACTUALIZADO EXIST-COSTO"
