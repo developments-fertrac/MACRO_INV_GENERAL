@@ -13,6 +13,8 @@ import tempfile
 import warnings
 import shutil
 import win32com
+import sys
+import time
 
 # Limpiar caché corrupto de win32com
 try:
@@ -33,7 +35,7 @@ BASE_PATH = Path(__file__).resolve().parent
 PASS_INV = "Compras2027"
 PASSWORDS_TRY = ["Compras2026", "Compras2027"]
 
-OUTPUT_BASENAME = "$2025 INVENTARIO GENERAL ACTUALIZADO"
+OUTPUT_BASENAME = "$2026 INVENTARIO GENERAL ACTUALIZADO"
 APPLY_PASSWORD_TO_OUTPUT = True
 
 # Prefijos para ubicar archivos descargados del ERP
@@ -44,8 +46,8 @@ PFX_VAL_FALT         = "VALORIZADO FALTANTES"
 PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
 PFX_MARCAS           = "MARCAS"
 PFX_DISTRIBUCION     = "DISTRIBUCION DE MATRICES"
-PFX_MAYOR_EXISTENCIA = "2025 INVENTARIO MYR EXISTENCIA"
-PFX_MATRIZ_USD = "2025 MATRIZ USD"
+PFX_MAYOR_EXISTENCIA = "2026 INVENTARIO MYR EXISTENCIA"
+PFX_MATRIZ_USD = "2026 MATRIZ USD"
 
 def buscar_hoja_por_patron(workbook, patron, ignorar_dolares=True):
     """
@@ -80,11 +82,11 @@ def buscar_archivo_por_patron(directorio, patron, ignorar_dolares=True):
 # ==== CONFIGURACIÓN DINÁMICA ====
 
 # Para MATRIZ USD
-PATRON_MATRIZ_USD = "2025 MATRIZ USD"
-PATRON_SHEET_2025 = "2025"
+PATRON_MATRIZ_USD = "2026 MATRIZ USD"
+PATRON_SHEET_2026 = "2026"
 
 # Para INVENTARIO GENERAL
-PATRON_INV_FILE = "2025 INVENTARIO GENERAL"
+PATRON_INV_FILE = "2026 INVENTARIO GENERAL"
 SHEET_INV_ORIG = "INVENTARIO"
 SHEET_INV_COPIA = "INVENTARIO COPIA"
 SHEET_INV_LISTA = "INV LISTA PRECIOS"
@@ -337,6 +339,112 @@ def com_convert_to_xlsx(path: Path, passwords: list[str] | None = None) -> Path:
     excel.Quit()
     return tmp
 
+# ========================================================================
+# 1. VERIFICAR SI ARCHIVO ESTÁ DISPONIBLE
+# ========================================================================
+
+def verificar_archivo_disponible(archivo: Path) -> bool:
+    """
+    Verifica si un archivo está disponible para lectura (no está bloqueado).
+    
+    Returns:
+        True si está disponible, False si está bloqueado
+    """
+    try:
+        # Intentar abrir en modo lectura
+        with open(archivo, 'rb') as f:
+            f.read(1)  # Leer 1 byte para verificar acceso
+        return True
+    except (PermissionError, IOError, OSError):
+        return False
+    except Exception as e:
+        log(f"  ⚠️ Error al verificar archivo: {e}")
+        return False
+
+
+# ========================================================================
+# 2. OBTENER ARCHIVO DE TRABAJO (ORIGINAL O COPIA)
+# ========================================================================
+
+def obtener_archivo_trabajo(archivo: Path, crear_copia_si_bloqueado: bool = True) -> tuple:
+    """
+    Obtiene la ruta del archivo para trabajar. Si está bloqueado, crea una copia temporal.
+    
+    Args:
+        archivo: Path del archivo original
+        crear_copia_si_bloqueado: Si True, crea copia cuando está bloqueado
+    
+    Returns:
+        tuple: (ruta_archivo_trabajo, es_copia_temporal)
+    """
+    
+    # Verificar si el archivo está disponible
+    if verificar_archivo_disponible(archivo):
+        log(f"  ✅ Archivo disponible para lectura directa")
+        return archivo, False
+    
+    # Archivo está bloqueado
+    log(f"  ⚠️ Archivo en uso por otro proceso: {archivo.name}")
+    
+    if not crear_copia_si_bloqueado:
+        raise PermissionError(
+            f"❌ ERROR: El archivo '{archivo.name}' está abierto.\n"
+            f"   Por favor, cierra el archivo e intenta nuevamente."
+        )
+    
+    # Crear copia temporal
+    log(f"  📋 Creando copia temporal para trabajar...")
+    
+    try:
+        # Crear directorio temporal si no existe
+        temp_dir = Path(tempfile.gettempdir()) / "fertrac_inventario_temp"
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Generar nombre único para la copia
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre_copia = f"TEMP_{timestamp}_{archivo.name}"
+        ruta_copia = temp_dir / nombre_copia
+        
+        # Copiar el archivo (Windows permite copiar archivos abiertos en lectura)
+        shutil.copy2(archivo, ruta_copia)
+        
+        log(f"  ✅ Copia temporal creada: {nombre_copia}")
+        
+        return ruta_copia, True
+        
+    except Exception as e:
+        log(f"  ❌ Error al crear copia temporal: {e}")
+        raise PermissionError(
+            f"❌ ERROR: No se pudo crear copia de '{archivo.name}'.\n"
+            f"   Detalle: {e}\n"
+            f"   Por favor, cierra el archivo e intenta nuevamente."
+        )
+
+
+# ========================================================================
+# 3. LIMPIAR ARCHIVO TEMPORAL
+# ========================================================================
+
+def limpiar_archivo_temporal(archivo: Path, es_temporal: bool):
+    """
+    Limpia un archivo temporal si corresponde.
+    
+    Args:
+        archivo: Path del archivo a limpiar
+        es_temporal: Si True, elimina el archivo
+    """
+    if not es_temporal or archivo is None:
+        return
+    
+    try:
+        if archivo.exists():
+            archivo.unlink()
+            log(f"  🗑️ Copia temporal eliminada: {archivo.name}")
+    except Exception as e:
+        log(f"  ⚠️ No se pudo eliminar copia temporal: {e}")
+
+
+
 def open_as_excel_source(path: Path, passwords: list[str] | None = None):
     """Devuelve un 'source' para pandas."""
     passwords = passwords or []
@@ -458,7 +566,7 @@ def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
             p = p_pl
         else:
             # Intentar con diferentes variantes
-            for pref in ["2025 INVENTARIO GENERAL", "INVENTARIO GENERAL"]:
+            for pref in ["2026 INVENTARIO GENERAL", "INVENTARIO GENERAL"]:
                 try:
                     p = find_by_prefix(base_dir, pref)
                     break
@@ -994,7 +1102,7 @@ def cargar_valorizado_desde_ruta(archivo_path: Path) -> pd.DataFrame:
 
 def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
     """
-    Carga el archivo MATRIZ USD, hoja 2025.
+    Carga el archivo MATRIZ USD, hoja 2026.
     """
     try:
         # 🔹 Usar búsqueda dinámica (ignora $ al inicio)
@@ -1014,14 +1122,14 @@ def cargar_matriz_usd(base_dir: Path) -> pd.DataFrame:
         sheet_found = None
         for sn in xf.sheet_names:
             nombre_limpio = re.sub(r'^\$+', '', sn).strip()
-            if PATRON_SHEET_2025 in nombre_limpio or _norm(nombre_limpio) == _norm(PATRON_SHEET_2025):
+            if PATRON_SHEET_2026 in nombre_limpio or _norm(nombre_limpio) == _norm(PATRON_SHEET_2026):
                 sheet_found = sn
                 log(f"  ✓ Hoja encontrada: '{sn}'")
                 break
         
         if not sheet_found:
             sheet_found = xf.sheet_names[0]
-            log(f"  ⚠ No se encontró hoja con '2025', usando: '{sheet_found}'")
+            log(f"  ⚠ No se encontró hoja con '2026', usando: '{sheet_found}'")
         
         df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
         
@@ -1279,15 +1387,33 @@ def cargar_distribucion(base_dir: Path) -> dict:
 def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
     """
     Carga el archivo MAYOR EXISTENCIA, hoja COSTOS INV FINAL.
-    Retorna REFERENCIA FERTRAC y REM EN CONSIG
+    Retorna REFERENCIA FERTRAC y REM EN CONSIG.
+    
+    NUEVO: Trabaja con copias temporales si el archivo está abierto.
     """
+    archivo_trabajo = None
+    es_copia_temporal = False
+    
     try:
+        # 1. Buscar archivo (ignorando temporales)
         p = find_by_prefix(base_dir, PFX_MAYOR_EXISTENCIA)
-        log(f"Abriendo Mayor Existencia: {p.name}")
+        log(f"Archivo encontrado: {p.name}")
         
-        src = open_as_excel_source(p, PASSWORDS_TRY)
+        # 2. Obtener archivo de trabajo (original o copia)
+        archivo_trabajo, es_copia_temporal = obtener_archivo_trabajo(
+            p, 
+            crear_copia_si_bloqueado=True
+        )
         
-        # Buscar hoja COSTOS INV FINAL
+        if es_copia_temporal:
+            log(f"  💡 Trabajando con copia temporal (archivo original en uso)")
+        
+        log(f"Abriendo Mayor Existencia: {archivo_trabajo.name}")
+        
+        # 3. Abrir el archivo
+        src = open_as_excel_source(archivo_trabajo, PASSWORDS_TRY)
+        
+        # 4. Buscar hoja COSTOS INV FINAL
         xf = pd.ExcelFile(src, engine="openpyxl")
         sheet_found = None
         
@@ -1299,7 +1425,7 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                 break
         
         if not sheet_found:
-            # Buscar alternativas
+                                 
             for sn in xf.sheet_names:
                 sn_norm = _norm(sn)
                 if "costo" in sn_norm or "final" in sn_norm:
@@ -1311,10 +1437,10 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
             sheet_found = xf.sheet_names[0]
             log(f"  ⚠ Usando primera hoja: '{sheet_found}'")
         
-        # Leer archivo buscando el encabezado
+        # 5. Leer archivo buscando el encabezado
         df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
         
-        # Buscar fila de encabezado
+        # 6. Buscar fila de encabezado
         header_row_idx = None
         for idx in range(min(20, len(df_raw))):
             row_str = ' '.join([str(v).upper() for v in df_raw.iloc[idx] if pd.notna(v)])
@@ -1324,18 +1450,18 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                 break
         
         if header_row_idx is None:
-            # Usar header_row configurado
+                                         
             header_row_idx = HEADER_ROW_MAYOR_EXIST - 1
             log(f"  ⚠ Usando fila de encabezado configurada: {HEADER_ROW_MAYOR_EXIST}")
         
-        # Leer con el encabezado correcto
+        # 7. Leer con el encabezado correcto
         df = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=header_row_idx)
         
         df.columns = [str(c).strip() for c in df.columns]
         
-        idx = {_norm(c): c for c in df.columns}
+                                               
         
-        #BUSCAR: REFERENCIA FERTRAC
+        # 8. BUSCAR: REFERENCIA FERTRAC
         ref_col = None
         for col_name in df.columns:
             col_norm = _norm(col_name)
@@ -1345,7 +1471,7 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                 break
         
         if not ref_col:
-            # Buscar solo "REFERENCIA"
+                                      
             for col_name in df.columns:
                 col_norm = _norm(col_name)
                 if col_norm == "referencia" or col_norm.startswith("referencia "):
@@ -1354,7 +1480,7 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                     break
         
         if not ref_col:
-            # Buscar simplemente "REF" o columnas que contengan "referenc"
+                                                                          
             for col_name in df.columns[:10]:
                 col_norm = _norm(col_name)
                 if "ref" in col_norm or "codigo" in col_norm:
@@ -1362,10 +1488,10 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                     log(f"Columna REFERENCIA encontrada (alternativa): '{col_name}'")
                     break
         
-        #BUSCAR: REM EN CONSIG (columna AI)
+        # 9. BUSCAR: REM EN CONSIG
         rem_consig_col = None
         
-        # Buscar exactamente "REM EN CONSIG"
+                                            
         for col_name in df.columns:
             col_norm = _norm(col_name)
             if col_norm == "rem en consig":
@@ -1374,7 +1500,7 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                 break
         
         if not rem_consig_col:
-            # Buscar variantes
+                              
             for col_name in df.columns:
                 col_norm = _norm(col_name)
                 if "rem" in col_norm and "consig" in col_norm:
@@ -1383,8 +1509,8 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                     break
         
         if not rem_consig_col:
-            # Buscar por posición (columna AI = índice 34 en Excel, pero en pandas puede variar)
-            # Buscar columnas que contengan "rem" o "consig"
+                                                                                                  
+                                                            
             for col_name in df.columns:
                 col_norm = _norm(col_name)
                 if "consignacion" in col_norm or "consig" in col_norm:
@@ -1397,31 +1523,37 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
         if not rem_consig_col:
             raise KeyError(f"No encontré columna REM EN CONSIG en {p.name}. Columnas: {list(df.columns)}")
         
-        # Filtrar filas válidas
+        # 10. Filtrar filas válidas
         df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
         
-        # Construir DataFrame de salida
+        # 11. Construir DataFrame de salida
         out = pd.DataFrame()
         out["__REF_MAYOR__"] = df[ref_col].apply(to_num_str)
         out["__REM_CONSIG__"] = pd.to_numeric(df[rem_consig_col], errors="coerce").fillna(0)
         
-        # Eliminar duplicados
+        # 12. Eliminar duplicados
         out = out.drop_duplicates(subset=["__REF_MAYOR__"], keep="first")
         
-        # Estadísticas
+        # 13. Estadísticas
         valores_no_cero = (out["__REM_CONSIG__"] != 0).sum()
         log(f"Mayor Existencia cargada: {len(out)} referencias")
         log(f"REM EN CONSIG: {valores_no_cero} valores diferentes de cero")
+        
+        # 14. LIMPIEZA: Eliminar copia temporal si se creó
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
         
         return out
         
     except FileNotFoundError:
         log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MAYOR_EXISTENCIA}'.")
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
         return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
+        
     except Exception as e:
         log(f"⚠ ERROR al cargar Mayor Existencia: {e}")
         import traceback
         log(traceback.format_exc())
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
         return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
 
 def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: int, 
@@ -2308,14 +2440,27 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
     Elimina registros según criterios estandarizados:
     1. NOMBRE MYR que contenga "Publicidad"
     2. REFERENCIA con patrón: 2 ceros + 2 números + letras (SIN símbolos como /)
+       ⚠️ EXCEPTO las referencias en REFERENCIAS_PROTEGIDAS
     3. NOMBRE MYR que contenga "Ajuste de precios"
     
     Retorna el nuevo last_row después de las eliminaciones.
     """
+    
+    # ✅ LISTA DE REFERENCIAS PROTEGIDAS (no se eliminarán)
+    REFERENCIAS_PROTEGIDAS = {
+        "0066A",  # Agregar aquí más referencias si es necesario
+        # "0012B",  # Ejemplo: agregar más excepciones
+    }
+    
     try:
         log("="*60)
         log("ELIMINANDO REGISTROS SEGÚN CRITERIOS ESTANDARIZADOS")
         log("="*60)
+        
+        # Mostrar referencias protegidas si existen
+        if REFERENCIAS_PROTEGIDAS:
+            log(f"📋 Referencias protegidas (NO se eliminarán): {', '.join(sorted(REFERENCIAS_PROTEGIDAS))}")
+            log("")
         
         # Buscar columnas necesarias
         col_nombre_myr = hdrn_copia.get(_norm("NOMBRE MYR"))
@@ -2333,6 +2478,7 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
         
         # Identificar filas a eliminar según los 3 criterios
         filas_a_eliminar = []
+        referencias_protegidas_encontradas = []
         
         log(f"Analizando {len(referencias)} registros...")
         
@@ -2347,14 +2493,19 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
                 motivo_eliminacion = "Publicidad en NOMBRE MYR"
             
             # CRITERIO 2: REFERENCIA con patrón 00##Letras (sin símbolos como /)
-            # Ejemplo: 0041R, 0012AB, etc.
+            # ✅ MODIFICADO: Verificar que NO esté en la lista de protegidas
             elif ref and "/" not in ref and "\\" not in ref:
                 # Verificar patrón: 2 ceros iniciales + 2 dígitos + letras
                 import re
-                # Patrón: exactamente 2 ceros, seguido de exactamente 2 dígitos, seguido de al menos una letra
                 patron = r'^00\d{2}[A-Za-z]+$'
+                
                 if re.match(patron, ref):
-                    motivo_eliminacion = "Patrón 00##Letras en REFERENCIA"
+                    # ✅ VERIFICAR SI ESTÁ PROTEGIDA
+                    if ref in REFERENCIAS_PROTEGIDAS:
+                        referencias_protegidas_encontradas.append(ref)
+                        # NO eliminar - continuar al siguiente registro
+                    else:
+                        motivo_eliminacion = "Patrón 00##Letras en REFERENCIA"
             
             # CRITERIO 3: NOMBRE MYR contiene "Ajuste de precios"
             if not motivo_eliminacion and "ajuste de precios" in nombre.lower():
@@ -2363,6 +2514,12 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
             # Si cumple algún criterio, agregar a lista de eliminación
             if motivo_eliminacion:
                 filas_a_eliminar.append((i, ref, nombre, motivo_eliminacion))
+        
+        # Mostrar referencias protegidas que se encontraron
+        if referencias_protegidas_encontradas:
+            log("")
+            log(f"✅ Referencias protegidas encontradas (NO eliminadas): {', '.join(set(referencias_protegidas_encontradas))}")
+            log("")
         
         # Eliminar filas
         if filas_a_eliminar:
