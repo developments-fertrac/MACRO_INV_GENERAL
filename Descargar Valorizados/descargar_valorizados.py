@@ -39,7 +39,7 @@ URL_LOGIN = "https://erp.fertrac.com/web/login"
 URL_INVENTARIO = "https://erp.fertrac.com/web?#action=246&model=stock.picking.type&view_type=kanban&menu_id=174"
 
 # Ruta base para descargas
-RUTA_DESCARGA = r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2025\Pruebas Inv General\Valorizados"
+RUTA_DESCARGA = r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026\Pruebas Inv General\Valorizados"
 
 # Configuracion
 MODO_HEADLESS = False
@@ -74,7 +74,7 @@ EMAIL_CONFIG = {
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,
     "sender_email": "analista_automatizacion@fertrac.com",
-    "sender_password": "lsda jbbr bnsw nlbe",
+    "sender_password": "lbih abom caxy pzbh",
     "recipient_emails": [
         "analista_automatizacion@fertrac.com",
         "data_science@fertrac.com",

@@ -14,7 +14,7 @@ import warnings
 import shutil
 import win32com
 import sys
-
+import time
 
 # Limpiar caché corrupto de win32com
 try:
@@ -29,7 +29,7 @@ warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==== CONFIG ====
 # BASE_PATH = Path(__file__).resolve().parent  
-BASE_PATH = Path(r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2025")
+BASE_PATH = Path(r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026")
 # BASE_PATH = Path(r"C:\MACRO_INVENTARIO_GENERAL")
 VALORIZADOS_EXTRA_PATH = BASE_PATH / "Pruebas Inv General" / "Valorizados"
 OUTPUT_PATH = BASE_PATH / "Pruebas Inv General"  # ✅ Nueva ruta de salida
@@ -41,7 +41,7 @@ VALORIZADO_SEARCH_PATHS = [BASE_PATH, VALORIZADOS_EXTRA_PATH]
 PASS_INV = "Compras2027"
 PASSWORDS_TRY = ["Compras2026", "Compras2027"]
 
-OUTPUT_BASENAME = "$2025 INVENTARIO GENERAL ACTUALIZADO"
+OUTPUT_BASENAME = "$2026 INVENTARIO GENERAL ACTUALIZADO"
 APPLY_PASSWORD_TO_OUTPUT = True
 
 # Prefijos para ubicar archivos descargados del ERP
@@ -52,8 +52,8 @@ PFX_VAL_FALT         = "VALORIZADO FALTANTES"
 PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
 PFX_MARCAS           = "MARCAS"
 PFX_DISTRIBUCION     = "DISTRIBUCION DE MATRICES"
-PFX_MAYOR_EXISTENCIA = "2025 INVENTARIO MYR EXISTENCIA"
-PFX_MATRIZ_USD = "2025 MATRIZ USD"
+PFX_MAYOR_EXISTENCIA = "2026 INVENTARIO MYR EXISTENCIA"
+PFX_MATRIZ_USD = "2026 MATRIZ USD"
 
 def buscar_hoja_por_patron(workbook, patron, ignorar_dolares=True):
     """
@@ -88,11 +88,11 @@ def buscar_archivo_por_patron(directorio, patron, ignorar_dolares=True):
 # ==== CONFIGURACIÓN DINÁMICA ====
 
 # Para MATRIZ USD
-PATRON_MATRIZ_USD = "2025 MATRIZ USD"
-PATRON_SHEET_2025 = "2025"
+PATRON_MATRIZ_USD = "2026 MATRIZ USD"
+PATRON_SHEET_2025 = "2026"
 
 # Para INVENTARIO GENERAL
-PATRON_INV_FILE = "2025 INVENTARIO GENERAL"
+PATRON_INV_FILE = "2026 INVENTARIO GENERAL"
 SHEET_INV_ORIG = "INVENTARIO"
 SHEET_INV_COPIA = "INVENTARIO COPIA"
 SHEET_INV_LISTA = "INV LISTA PRECIOS"
@@ -120,10 +120,12 @@ EMAIL_CONFIG = {
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,  # Usado solo en método 2 (fallback)
     "sender_email": "analista_automatizacion@fertrac.com",
-    "sender_password": "lsda jbbr bnsw nlbe",  # ← Contraseña de aplicación de Google
+    "sender_password": "lbih abom caxy pzbh",  # ← Contraseña de aplicación de Google
     "recipient_emails": [
         "analista_automatizacion@fertrac.com",
-        # "data_science@fertrac.com",
+        "data_science@fertrac.com",
+        "asistentecompras@fertrac.com",   
+        "analistacompras5@fertrac.com",
    
         
     ],
@@ -241,6 +243,7 @@ def _strip_dol_tmp(name: str) -> str:
     base = Path(name).stem.replace("~$", "")
     base = re.sub(r"^\$+", "", base)
     return base
+
 def validar_fecha_archivo_hoy(archivo: Path) -> bool:
     """
     Verifica si un archivo fue modificado HOY (mismo día que la ejecución).
@@ -275,57 +278,435 @@ def validar_fecha_archivo_hoy(archivo: Path) -> bool:
         log(f"   ❌ Error al validar fecha: {e}")
         return False
 
+def obtener_ruta_inventario_actualizado(base_path: Path) -> Path:
+    """
+    Construye la ruta dinámica al directorio del mes actual para INVENTARIO GENERAL ACTUALIZADO.
+    
+    Formato: D:\...\INFORMES\INVENTARIO GENERAL ACTUALIZADO\{MES_NUMERO}. {MES_NOMBRE}
+    Ejemplo: D:\...\INFORMES\INVENTARIO GENERAL ACTUALIZADO\12. DICIEMBRE
+    
+    Returns:
+        Path al directorio del mes actual
+    """
+    hoy = date.today()
+    mes_numero = hoy.month
+    
+    # Nombres de meses en español (mayúsculas)
+    meses_es = [
+        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+        "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
+    ]
+    mes_nombre = meses_es[mes_numero - 1]
+    
+    # Construir ruta: {mes_numero}. {mes_nombre}
+    carpeta_mes = f"{mes_numero:02d}. {mes_nombre}"
+    
+    ruta_completa = base_path / "INFORMES" / "INVENTARIO GENERAL ACTUALIZADO" / carpeta_mes
+    
+    return ruta_completa
+
+
+def generar_nombre_inventario_dia(fecha: date = None) -> str:
+    """
+    Genera el nombre esperado del archivo INVENTARIO GENERAL ACTUALIZADO para una fecha.
+    
+    Formato: INVENTARIO GENERAL ACTUALIZADO {DIA} DE {MES} DE {AÑO}
+    Ejemplo: INVENTARIO GENERAL ACTUALIZADO 17 DE DICIEMBRE DE 2025
+    
+    Args:
+        fecha: Fecha para la cual generar el nombre (default: hoy)
+    
+    Returns:
+        String con el nombre base del archivo (sin extensión)
+    """
+    if fecha is None:
+        fecha = date.today()
+    
+    # ✅ FIX: Usar lista hardcoded en lugar de strftime
+    meses_es = [
+        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+        "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
+    ]
+    
+    dia = fecha.day
+    mes_nombre = meses_es[fecha.month - 1]  # ✅ SIEMPRE en español
+    año = fecha.year
+    
+    nombre = f"INVENTARIO GENERAL ACTUALIZADO {dia:02d} DE {mes_nombre} DE {año}"
+    
+    return nombre
+
+def buscar_inventario_actualizado_hoy(base_path: Path) -> Path:
+    """
+    Busca el archivo INVENTARIO GENERAL ACTUALIZADO del día actual.
+    ACEPTA SUFIJOS como (MAÑANA), (TARDE), etc.
+    """
+    # Obtener ruta del mes actual
+    ruta_mes = obtener_ruta_inventario_actualizado(base_path)
+    
+    log(f"Buscando inventario actualizado en: {ruta_mes}")
+    
+    # ✅ DEBUG: Verificar que la ruta existe
+    log(f"¿Ruta existe? {ruta_mes.exists()}")
+    log(f"¿Es directorio? {ruta_mes.is_dir()}")
+    
+    # Verificar que la carpeta exista
+    if not ruta_mes.exists():
+        raise FileNotFoundError(
+            f"No existe la carpeta del mes actual:\n"
+            f"  {ruta_mes}\n"
+            f"Por favor, verifica que la estructura de carpetas sea correcta."
+        )
+    
+    # Generar nombre base esperado (sin sufijos)
+    nombre_base = generar_nombre_inventario_dia()
+    
+    log(f"Patrón de búsqueda generado: '{nombre_base}'")
+    log(f"Patrón normalizado: '{_norm(nombre_base)}'")
+    log(f"Buscando archivo: {nombre_base}.xlsx/.xlsm (permite sufijos como '(MAÑANA)')")
+    
+    # ✅ FIX: Buscar AMBAS extensiones (.xlsx Y .xlsm)
+    archivos_encontrados = []
+    
+    # ✅ NUEVO: Listar TODOS los archivos primero para debug
+    log(f"")
+    log(f"Listando TODOS los archivos en la carpeta:")
+    try:
+        todos_archivos = list(ruta_mes.iterdir())
+        log(f"Total de archivos/carpetas: {len(todos_archivos)}")
+        
+        archivos_excel = [f for f in todos_archivos if f.is_file() and f.suffix.lower() in ['.xlsx', '.xlsm', '.xls']]
+        log(f"Archivos Excel encontrados: {len(archivos_excel)}")
+        
+        if len(archivos_excel) == 0:
+            log(f"⚠️ NO se encontraron archivos Excel en la carpeta")
+            log(f"Contenido de la carpeta:")
+            for item in todos_archivos[:20]:
+                log(f"   • {item.name} (tipo: {'DIR' if item.is_dir() else 'FILE'}, ext: {item.suffix if item.is_file() else 'N/A'})")
+        else:
+            log(f"Archivos Excel en la carpeta:")
+            for arch in archivos_excel[:10]:
+                nombre_limpio = _strip_dol_tmp(arch.stem)
+                log(f"   • {arch.name}")
+                log(f"     - Limpio: '{nombre_limpio}'")
+                log(f"     - Normalizado: '{_norm(nombre_limpio)}'")
+        
+    except Exception as e:
+        log(f"❌ Error al listar archivos: {e}")
+        import traceback
+        log(traceback.format_exc())
+    
+    # ✅ BÚSQUEDA FLEXIBLE con AMBAS extensiones
+    for extension in ['.xlsx', '.xlsm', '.xls']:
+        for archivo in ruta_mes.glob(f"*{extension}"):
+            if not archivo.is_file():
+                continue
+            
+            # Remover $ del inicio y extensión
+            nombre_limpio = _strip_dol_tmp(archivo.stem)
+            
+            # Verificar si CONTIENE el patrón base
+            nombre_norm = _norm(nombre_limpio)
+            patron_norm = _norm(nombre_base)
+            
+            # Log de comparación para archivos que empiecen similar
+            if nombre_norm.startswith("inventario general actualizado 17"):
+                log(f"")
+                log(f"   ⚙️ Comparando:")
+                log(f"      Archivo: '{nombre_norm}'")
+                log(f"      Patrón:  '{patron_norm}'")
+                log(f"      ¿Coincide? {nombre_norm.startswith(patron_norm)}")
+            
+            # Verificar si el archivo empieza con el patrón esperado
+            if nombre_norm.startswith(patron_norm):
+                archivos_encontrados.append(archivo)
+                
+                # Determinar sufijo si lo tiene
+                sufijo = nombre_limpio[len(nombre_base):].strip()
+                if sufijo:
+                    log(f"   ✅ Archivo encontrado: {archivo.name} (sufijo: '{sufijo}')")
+                else:
+                    log(f"   ✅ Archivo encontrado: {archivo.name}")
+    
+    # Si no se encuentra archivo del día
+    if len(archivos_encontrados) == 0:
+        # Listar archivos disponibles
+        archivos_disponibles = []
+        for ext in ['.xlsx', '.xlsm', '.xls']:
+            archivos_disponibles.extend(list(ruta_mes.glob(f"*{ext}")))
+        
+        archivos_str = "\n".join([f"     - {f.name}" for f in archivos_disponibles[:15]])
+        
+        if len(archivos_disponibles) > 15:
+            archivos_str += f"\n     ... y {len(archivos_disponibles) - 15} archivos más"
+        
+        if len(archivos_disponibles) == 0:
+            archivos_str = "     [NINGÚN ARCHIVO EXCEL ENCONTRADO]"
+        
+        raise FileNotFoundError(
+            f"❌ ERROR CRÍTICO: No se encontró el archivo INVENTARIO GENERAL ACTUALIZADO de HOY.\n\n"
+            f"  📅 Fecha esperada: {date.today().day:02d} de {meses_es[date.today().month - 1]} de {date.today().year}\n"
+            f"  📁 Ubicación: {ruta_mes}\n"
+            f"  📝 Patrón buscado: {nombre_base}*.xlsx/.xlsm\n\n"
+            f"  💡 Archivos disponibles en la carpeta:\n{archivos_str}\n\n"
+            f"  ⚠️ Por favor, genera el inventario actualizado desde el ERP para el día de hoy."
+        )
+    
+    # Si hay múltiples archivos del mismo día
+    if len(archivos_encontrados) > 1:
+        log(f"")
+        log(f"  ⚠️ Se encontraron {len(archivos_encontrados)} archivos del día:")
+        for idx, arch in enumerate(archivos_encontrados, 1):
+            log(f"     {idx}. {arch.name}")
+        
+        # Tomar el más reciente
+        archivos_encontrados.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        log(f"  → Usando el más reciente: {archivos_encontrados[0].name}")
+    
+    archivo_final = archivos_encontrados[0]
+    
+    # Validar fecha
+    if not validar_fecha_archivo_hoy(archivo_final):
+        raise FileNotFoundError(
+            f"❌ ERROR CRÍTICO: El archivo encontrado NO fue modificado HOY.\n\n"
+            f"  📄 Archivo: {archivo_final.name}\n"
+            f"  📅 Modificado: {datetime.fromtimestamp(archivo_final.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"  📅 Hoy: {date.today()}\n\n"
+            f"  ⚠️ Por favor, genera un inventario actualizado NUEVO desde el ERP."
+        )
+    
+    return archivo_final
+
+# ========================================================================
+# 1. VERIFICAR SI ARCHIVO ESTÁ DISPONIBLE
+# ========================================================================
+
+def verificar_archivo_disponible(archivo: Path) -> bool:
+    """
+    Verifica si un archivo está disponible para lectura (no está bloqueado).
+    
+    Returns:
+        True si está disponible, False si está bloqueado
+    """
+    try:
+        # Intentar abrir en modo lectura
+        with open(archivo, 'rb') as f:
+            f.read(1)  # Leer 1 byte para verificar acceso
+        return True
+    except (PermissionError, IOError, OSError):
+        return False
+    except Exception as e:
+        log(f"  ⚠️ Error al verificar archivo: {e}")
+        return False
+
+
+# ========================================================================
+# 2. OBTENER ARCHIVO DE TRABAJO (ORIGINAL O COPIA)
+# ========================================================================
+
+def obtener_archivo_trabajo(archivo: Path, crear_copia_si_bloqueado: bool = True) -> tuple:
+    """
+    Obtiene la ruta del archivo para trabajar. Si está bloqueado, crea una copia temporal.
+    
+    Args:
+        archivo: Path del archivo original
+        crear_copia_si_bloqueado: Si True, crea copia cuando está bloqueado
+    
+    Returns:
+        tuple: (ruta_archivo_trabajo, es_copia_temporal)
+    """
+    
+    # Verificar si el archivo está disponible
+    if verificar_archivo_disponible(archivo):
+        log(f"  ✅ Archivo disponible para lectura directa")
+        return archivo, False
+    
+    # Archivo está bloqueado
+    log(f"  ⚠️ Archivo en uso por otro proceso: {archivo.name}")
+    
+    if not crear_copia_si_bloqueado:
+        raise PermissionError(
+            f"❌ ERROR: El archivo '{archivo.name}' está abierto.\n"
+            f"   Por favor, cierra el archivo e intenta nuevamente."
+        )
+    
+    # Crear copia temporal
+    log(f"  📋 Creando copia temporal para trabajar...")
+    
+    try:
+        # Crear directorio temporal si no existe
+        temp_dir = Path(tempfile.gettempdir()) / "fertrac_inventario_temp"
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Generar nombre único para la copia
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        nombre_copia = f"TEMP_{timestamp}_{archivo.name}"
+        ruta_copia = temp_dir / nombre_copia
+        
+        # Copiar el archivo (Windows permite copiar archivos abiertos en lectura)
+        shutil.copy2(archivo, ruta_copia)
+        
+        log(f"  ✅ Copia temporal creada: {nombre_copia}")
+        
+        return ruta_copia, True
+        
+    except Exception as e:
+        log(f"  ❌ Error al crear copia temporal: {e}")
+        raise PermissionError(
+            f"❌ ERROR: No se pudo crear copia de '{archivo.name}'.\n"
+            f"   Detalle: {e}\n"
+            f"   Por favor, cierra el archivo e intenta nuevamente."
+        )
+
+
+# ========================================================================
+# 3. LIMPIAR ARCHIVO TEMPORAL
+# ========================================================================
+
+def limpiar_archivo_temporal(archivo: Path, es_temporal: bool):
+    """
+    Limpia un archivo temporal si corresponde.
+    
+    Args:
+        archivo: Path del archivo a limpiar
+        es_temporal: Si True, elimina el archivo
+    """
+    if not es_temporal or archivo is None:
+        return
+    
+    try:
+        if archivo.exists():
+            archivo.unlink()
+            log(f"  🗑️ Copia temporal eliminada: {archivo.name}")
+    except Exception as e:
+        log(f"  ⚠️ No se pudo eliminar copia temporal: {e}")
+
+
+# ========================================================================
+# 4. LIMPIAR COPIAS TEMPORALES ANTIGUAS
+# ========================================================================
+
+def limpiar_copias_temporales_antiguas(max_horas: int = 24):
+    """
+    Limpia copias temporales de más de X horas.
+    
+    Args:
+        max_horas: Edad máxima en horas antes de eliminar
+    """
+    temp_dir = Path(tempfile.gettempdir()) / "fertrac_inventario_temp"
+    
+    if not temp_dir.exists():
+        return
+    
+    try:
+        ahora = time.time()
+        eliminados = 0
+        
+        for archivo in temp_dir.glob("TEMP_*"):
+            if not archivo.is_file():
+                continue
+            
+            # Verificar edad del archivo
+            edad_segundos = ahora - archivo.stat().st_mtime
+            edad_horas = edad_segundos / 3600
+            
+            if edad_horas > max_horas:
+                try:
+                    archivo.unlink()
+                    eliminados += 1
+                except:
+                    pass
+        
+        if eliminados > 0:
+            log(f"  🗑️ Limpieza automática: {eliminados} archivos temporales antiguos eliminados")
+            
+    except Exception as e:
+        log(f"  ⚠️ Error en limpieza automática: {e}")
+
+
+# ========================================================================
+# 5. INICIALIZAR SISTEMA DE COPIAS TEMPORALES
+# ========================================================================
+
+def inicializar_sistema_copias_temporales():
+    """
+    Inicializa el sistema de copias temporales.
+    Debe llamarse al inicio del script principal.
+    """
+    log("")
+    log("🧹 Inicializando sistema de copias temporales...")
+    
+    # Limpiar copias antiguas (más de 24 horas)
+    limpiar_copias_temporales_antiguas(max_horas=24)
+    
+    log("✅ Sistema de copias temporales listo")
+    log("")
+
+# ========================================================================
+# 6. ACTUALIZAR find_by_prefix (REEMPLAZAR LA EXISTENTE)
+# ========================================================================
+
 def find_by_prefix(basedir: Path, prefix: str, exts=[".xlsx", ".xlsm", ".xls", ".csv"]) -> Path:
     """
     Busca por prefijo normalizado, elige el más reciente.
-    NUEVO: Da prioridad a coincidencias exactas antes que parciales.
+    FILTRADO: Ignora archivos temporales de Excel (~$) y copias temporales (TEMP_)
     """
     pref = _norm(prefix)
     cands = []
-    exact_match = None  # NUEVO: almacena coincidencia exacta
+    exact_match = None
+    archivos_temporales_ignorados = []
     
     for f in basedir.iterdir():
         if not f.is_file() or f.suffix.lower() not in exts:
             continue
         
+        # ✅ IGNORAR archivos temporales de Excel (comienzan con ~$)
+        if f.name.startswith("~$"):
+            archivos_temporales_ignorados.append(f.name)
+            continue
+        
+        # ✅ IGNORAR copias temporales creadas por este script (comienzan con TEMP_)
+        if f.name.startswith("TEMP_"):
+            archivos_temporales_ignorados.append(f.name)
+            continue
+        
         nn = _norm(_strip_dol_tmp(f.name))
         
-        # NUEVO: Verificar coincidencia exacta primero
+        # Verificar coincidencia exacta primero
         if nn == pref:
             exact_match = f
             log(f"  [OK] Coincidencia EXACTA encontrada: {f.name}")
-            break  # Salir inmediatamente si hay coincidencia exacta
+            break
         
-        # Coincidencias parciales (como antes)
+        # Coincidencias parciales
         if nn.startswith(pref) or pref in nn:
             cands.append(f)
             continue
         
-        # Búsqueda por tokens (como antes)
+        # Búsqueda por tokens
         tokens = pref.split()
         if all(t in nn for t in tokens):
             cands.append(f)
     
-    # NUEVO: Retornar coincidencia exacta si existe
+    # Log de archivos ignorados
+    if archivos_temporales_ignorados:
+        log(f"  ⚠️ Archivos temporales ignorados: {len(archivos_temporales_ignorados)}")
+    
+    # Retornar coincidencia exacta si existe
     if exact_match:
         return exact_match
     
-    # Si no hay coincidencia exacta, usar el algoritmo original
     if not cands:
         raise FileNotFoundError(f"No encontré archivos que coincidan con '{prefix}' en {basedir}")
     
-    # 🆕 LOG DETALLADO
+    # Log de candidatos
     log("  📋 Candidatos encontrados:")
-    for i, c in enumerate(cands[:5]):  # Mostrar top 5
+    for i, c in enumerate(cands[:5]):
         fecha = datetime.fromtimestamp(c.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
         log(f"     {i+1}. {c.name} (modificado: {fecha})")
     
     cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    
     log(f"  ✅ Seleccionado: {cands[0].name}")
-    
-    # Log para debugging
-    log(f"  → Usando archivo más reciente (sin coincidencia exacta): {cands[0].name}")
     
     return cands[0]
 
@@ -497,123 +878,123 @@ def read_excel_header_at(path: Path, sheet: str | int, header_row_visible: int) 
 
 # ==== LECTURA DE INSUMOS ====
 def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
-    """ERP preferido; si no hay, cae en PLANTILLA."""
-    try:
-        p = find_by_prefix(base_dir, PFX_INV_ACTUALIZADO)
-        log(f"Abriendo inventario actualizado (ERP): {p.name}")
-        
-        # 🔹 AÑADIDO: Manejo de contraseñas
-        src = open_as_excel_source(p, PASSWORDS_TRY)
-        df = read_excel_header_at(src, sheet="Sheet 1", header_row_visible=1)
-        
-        idx = {_norm(c): c for c in df.columns}
-
-        ref_col = (
-            idx.get("referencia") or idx.get("referencia interna") or idx.get("ref")
-            or idx.get("codigo") or idx.get("código")
-            or next((real for kn, real in idx.items() if "referenc" in kn or "codigo" in kn or kn.endswith("ref")), None)
-        )
-        if not ref_col:
-            raise KeyError(f"{p.name}: no encuentro columna de Referencia. Encabezados: {list(df.columns)}")
-
-        df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
-        
-        
-        # Buscar específicamente las problemáticas
-        refs_problematicas = df[df[ref_col].astype(str).str.contains(r'95\.?276|500\.?845', regex=True, na=False)]
-        if len(refs_problematicas) > 0:
-            for idx_row, row in refs_problematicas.iterrows():
-                val_original = row[ref_col]
-        
-        # 🔹 NORMALIZACIÓN CRÍTICA: Aplicar to_num_str a cada valor
-        df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)    
-       
-
-        nom_col     = idx.get("nombre") or "Nombre"
-        marca_col   = next((real for kn, real in idx.items()
-                            if ("marca/ nombre a mostrar" in kn) or ("marca nombre a mostrar" in kn) or (kn == "marca")), None) \
-                      or next((real for kn, real in idx.items() if "marca" in kn and "mostrar" in kn), None)
-        linea_col   = next((real for kn, real in idx.items()
-                            if ("linea/ nombre a mostrar" in kn) or ("línea/ nombre a mostrar" in kn)), None) \
-                      or next((real for kn, real in idx.items() if "linea" in kn and "mostrar" in kn), None)
-        sublinea_col = next((real for kn, real in idx.items() if "sub" in kn and "linea" in kn and "mostrar" in kn), None)
-        costo_col   = idx.get("costo") or "Costo"
-
-        rename = {}
-        if nom_col      in df.columns: rename[nom_col]      = "__NOMBRE__"
-        if marca_col    in df.columns: rename[marca_col]    = "__MARCA_SYS__"
-        if linea_col    in df.columns: rename[linea_col]    = "__LINEA_SYS__"
-        if sublinea_col in df.columns: rename[sublinea_col] = "__SUBLINEA_SYS__"
-        if costo_col    in df.columns: rename[costo_col]    = "__COSTO__"
-        
-        df_final = df.rename(columns=rename)
-        
-
-        return df_final
-        
-    except FileNotFoundError:
-        pass
-
-    # 🔹 Usar búsqueda dinámica (ignora $ al inicio)
-    p = buscar_archivo_por_patron(base_dir, PATRON_INV_FILE)
+    """
+    Carga INVENTARIO GENERAL ACTUALIZADO desde el ERP.
+    ⚠️ NO USA FALLBACK - Si no encuentra el archivo, detiene el proceso con error.
+    """
     
-    if not p:
-        # Fallback: intentar con el nombre exacto
-        p_pl = base_dir / PATRON_INV_FILE
-        if p_pl.exists():
-            p = p_pl
-        else:
-            # Intentar con diferentes variantes
-            for pref in ["2025 INVENTARIO GENERAL", "INVENTARIO GENERAL"]:
-                try:
-                    p = find_by_prefix(base_dir, pref)
-                    break
-                except Exception:
-                    p = None
-            
-            if p is None:
-                raise FileNotFoundError(
-                    f"No encontré ni '{PFX_INV_ACTUALIZADO}' ni '{PATRON_INV_FILE}' en {base_dir}"
-                )
-    log(f"[Fallback] Abriendo plantilla de inventario: {p.name}")
-    df = read_excel_header_at(p, sheet=SHEET_INV_ORIG, header_row_visible=HEADER_ROW_INV)
+    log("="*70)
+    log("BUSCANDO INVENTARIO GENERAL ACTUALIZADO (ERP)")
+    log("="*70)
+    
+    # ✅ Buscar archivo del día actual en carpeta del mes
+    # ⚠️ Si falla, levanta FileNotFoundError y detiene el proceso
+    p = buscar_inventario_actualizado_hoy(base_dir)
+    
+    log(f"✅ Abriendo inventario actualizado (ERP): {p.name}")
+    log(f"   📁 Ubicación: {p.parent}")
+    log("="*70)
+    
+    # Manejo de contraseñas
+    src = open_as_excel_source(p, PASSWORDS_TRY)
+    df = read_excel_header_at(src, sheet="Sheet 1", header_row_visible=1)
+    
     idx = {_norm(c): c for c in df.columns}
 
     ref_col = (
-        idx.get("referencia") or idx.get("referencia fertrac") or idx.get("referencia interna")
-        or idx.get("ref") or idx.get("código") or idx.get("codigo")
+        idx.get("referencia") or idx.get("referencia interna") or idx.get("ref")
+        or idx.get("codigo") or idx.get("código")
         or next((real for kn, real in idx.items() if "referenc" in kn or "codigo" in kn or kn.endswith("ref")), None)
     )
     if not ref_col:
-        raise KeyError(f"{p.name}: no encuentro columna 'REFERENCIA'. Encabezados: {list(df.columns)}")
+        raise KeyError(f"{p.name}: no encuentro columna de Referencia. Encabezados: {list(df.columns)}")
 
     df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
-    df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)
+    
+    # Normalización de referencias
+    df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)    
 
-    nombre_odoo = idx.get("nombre odoo") or idx.get("nombre")
-    marca_sys   = idx.get("marca sistema")
-    linea_sys   = idx.get("linea sistema") or idx.get("línea sistema")
-    sub_sys     = idx.get("sub- linea sistema") or idx.get("sub-linea sistema") or idx.get("sub linea sistema")
-    costo_prom  = idx.get("costo promedio") or idx.get("costo prom")
+    nom_col     = idx.get("nombre") or "Nombre"
+    marca_col   = next((real for kn, real in idx.items()
+                        if ("marca/ nombre a mostrar" in kn) or ("marca nombre a mostrar" in kn) or (kn == "marca")), None) \
+                  or next((real for kn, real in idx.items() if "marca" in kn and "mostrar" in kn), None)
+    linea_col   = next((real for kn, real in idx.items()
+                        if ("linea/ nombre a mostrar" in kn) or ("línea/ nombre a mostrar" in kn)), None) \
+                  or next((real for kn, real in idx.items() if "linea" in kn and "mostrar" in kn), None)
+    sublinea_col = next((real for kn, real in idx.items() if "sub" in kn and "linea" in kn and "mostrar" in kn), None)
+    costo_col   = idx.get("costo") or "Costo"
 
     rename = {}
-    if nombre_odoo in df.columns: rename[nombre_odoo] = "__NOMBRE__"
-    if marca_sys   in df.columns: rename[marca_sys]   = "__MARCA_SYS__"
-    if linea_sys   in df.columns: rename[linea_sys]   = "__LINEA_SYS__"
-    if sub_sys     in df.columns: rename[sub_sys]     = "__SUBLINEA_SYS__"
-    if costo_prom  in df.columns: rename[costo_prom]  = "__COSTO__"
-
-    return df.rename(columns=rename)
-
+    if nom_col      in df.columns: rename[nom_col]      = "__NOMBRE__"
+    if marca_col    in df.columns: rename[marca_col]    = "__MARCA_SYS__"
+    if linea_col    in df.columns: rename[linea_col]    = "__LINEA_SYS__"
+    if sublinea_col in df.columns: rename[sublinea_col] = "__SUBLINEA_SYS__"
+    if costo_col    in df.columns: rename[costo_col]    = "__COSTO__"
+    
+    df_final = df.rename(columns=rename)
+    
+    return df_final
 
 # ============================================================================
 # FUNCIÓN: ACTUALIZAR REFERENCIAS DESDE FORMATO CODIFICACIÓN
 # ============================================================================
+def resolver_cadena_referencias(mapeo: dict) -> dict:
+    """
+    Resuelve cadenas transitivas de referencias.
+    
+    Ejemplos:
+        A → B, B → C  ==>  A → C, B → C
+        A → B, B → A  ==>  Detecta ciclo (evita bucle infinito)
+        A → B, B → C, C → D  ==>  A → D, B → D, C → D
+    
+    Args:
+        mapeo: Diccionario {ref_antigua: ref_nueva}
+    
+    Returns:
+        dict: Mapeo con cadenas resueltas
+    """
+    mapeo_resuelto = {}
+    
+    for ref_origen in mapeo.keys():
+        ref_actual = ref_origen
+        visitados = set()
+        
+        # Seguir la cadena hasta el final
+        while ref_actual in mapeo:
+            # Detectar ciclos
+            if ref_actual in visitados:
+                log(f"⚠️  CICLO DETECTADO: {' → '.join(visitados)} → {ref_actual}")
+                log(f"   Se usa la última referencia válida antes del ciclo")
+                break
+            
+            visitados.add(ref_actual)
+            ref_siguiente = mapeo[ref_actual]
+            
+            # Si la siguiente es diferente, continuar
+            if ref_siguiente != ref_actual:
+                ref_actual = ref_siguiente
+            else:
+                break
+        
+        # Guardar el resultado final
+        if ref_actual != ref_origen:
+            mapeo_resuelto[ref_origen] = ref_actual
+            
+            # Log si hubo cadena
+            if len(visitados) > 1:
+                cadena = ' → '.join(visitados) + f' → {ref_actual}'
+                log(f"   📍 Cadena resuelta: {cadena}")
+    
+    return mapeo_resuelto
+
 
 def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path, password: str):
     """
     Actualiza las referencias en la hoja INVENTARIO original basándose en 
     FORMATO CODIFICACIÓN.xlsx antes de empezar el proceso principal.
+    
+    OPTIMIZACIÓN: Solo modifica las celdas que realmente cambian, preservando
+    el formato de las demás.
     
     Args:
         wb: Workbook de Excel abierto
@@ -728,7 +1109,7 @@ def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path,
             log(f"Columna antigua: '{col_ref_antigua}'")
             log(f"Columna nueva: '{col_ref_nueva}'")
             
-            # 5. CREAR DICCIONARIO DE MAPEO
+            # 5. CREAR DICCIONARIO DE MAPEO (SOLO CAMBIOS REALES)
             mapeo = {}
             for _, row in df_modificaciones.iterrows():
                 ref_antigua = str(row[col_ref_antigua]).strip()
@@ -742,15 +1123,19 @@ def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path,
                     ref_antigua_norm = to_num_str(ref_antigua)
                     ref_nueva_norm = to_num_str(ref_nueva)
                     
-                    if ref_antigua_norm and ref_nueva_norm:
+                    # Solo agregar si SON DIFERENTES
+                    if ref_antigua_norm and ref_nueva_norm and ref_antigua_norm != ref_nueva_norm:
                         mapeo[ref_antigua_norm] = ref_nueva_norm
-            
-            log(f"Mapa de reemplazos creado: {len(mapeo)} referencias válidas")
-            
-            if len(mapeo) == 0:
-                log("No hay referencias válidas para reemplazar")
-                log("="*70)
-                return 0
+
+            log(f"Mapa inicial: {len(mapeo)} referencias")
+
+            # ✅ NUEVO: Resolver cadenas transitivas
+            log("")
+            log("Resolviendo cadenas transitivas...")
+            mapeo = resolver_cadena_referencias(mapeo)
+
+            log(f"Mapa final después de resolver cadenas: {len(mapeo)} referencias")
+
             
             # Mostrar muestra
             log("")
@@ -764,7 +1149,6 @@ def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path,
             log("")
             log("Buscando columna REFERENCIA en INVENTARIO original...")
             
-            # ✅ USANDO ws_headers_smart que retorna 3 valores
             hr_orig, hdr_orig, hdrn_orig = ws_headers_smart(
                 ws_inv_orig, 
                 HEADER_ROW_INV,
@@ -803,61 +1187,66 @@ def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path,
             
             log(f"Total de referencias leídas: {len(referencias_norm)}")
             
-            # 9. REALIZAR REEMPLAZOS
+            # ============================================================================
+            # 9. APLICAR CAMBIOS SOLO EN LAS CELDAS QUE CAMBIAN (OPTIMIZACIÓN CRÍTICA)
+            # ============================================================================
             log("")
-            log("Aplicando reemplazos...")
+            log("Aplicando cambios SOLO en celdas modificadas...")
             
-            nuevas_referencias = []
             reemplazos_realizados = 0
-            referencias_actualizadas = set()
-            
-            # 🆕 REGISTRO DETALLADO PARA REPORTE
             cambios_exitosos = []
+            referencias_actualizadas = set()
             
             for i, ref_norm in enumerate(referencias_norm):
                 if ref_norm in mapeo:
+                    # ✅ SÍ hay cambio - modificar SOLO esta celda
                     ref_nueva = mapeo[ref_norm]
-                    nuevas_referencias.append(ref_nueva)
-                    reemplazos_realizados += 1
-                    referencias_actualizadas.add(ref_norm)
+                    fila_excel = HEADER_ROW_INV + 1 + i
                     
-                    # 🆕 Guardar para reporte
-                    cambios_exitosos.append({
-                        'FILA_EXCEL': HEADER_ROW_INV + 1 + i,
-                        'REFERENCIA_ANTIGUA': referencias_actuales[i],  # Original sin normalizar
-                        'REFERENCIA_NUEVA': ref_nueva,
-                        'ESTADO': 'ACTUALIZADO'
-                    })
-                    
-                    if reemplazos_realizados <= 5:
-                        log(f"  Fila {HEADER_ROW_INV + 1 + i}: {ref_norm:40} → {ref_nueva}")
-                    elif reemplazos_realizados == 6:
-                        log(f"  ... procesando más reemplazos ...")
-                else:
-                    nuevas_referencias.append(referencias_actuales[i])
+                    try:
+                        # Modificar celda individual con formato TEXTO
+                        cell = ws_inv_orig.Cells(fila_excel, ref_col_idx)
+                        
+                        # Aplicar formato texto ANTES de escribir
+                        cell.NumberFormat = "@"
+                        
+                        # Escribir con apóstrofe si tiene "/"
+                        if "/" in ref_nueva:
+                            cell.Value = f"'{ref_nueva}"
+                        else:
+                            cell.Value = ref_nueva
+                        
+                        # Re-aplicar formato texto después
+                        cell.NumberFormat = "@"
+                        
+                        reemplazos_realizados += 1
+                        referencias_actualizadas.add(ref_norm)
+                        
+                        # Guardar para reporte
+                        cambios_exitosos.append({
+                            'FILA_EXCEL': fila_excel,
+                            'REFERENCIA_ANTIGUA': referencias_actuales[i],
+                            'REFERENCIA_NUEVA': ref_nueva,
+                            'ESTADO': 'ACTUALIZADO'
+                        })
+                        
+                        if reemplazos_realizados <= 5:
+                            log(f"  ✓ Fila {fila_excel}: {ref_norm:40} → {ref_nueva}")
+                        elif reemplazos_realizados == 6:
+                            log(f"  ... procesando más reemplazos ...")
+                            
+                    except Exception as e:
+                        log(f"  ⚠️ Error al actualizar fila {fila_excel}: {e}")
             
-            log(f"Reemplazos realizados: {reemplazos_realizados}")
+            # ✅ NO escribimos las que NO cambiaron - quedan intactas con su formato original
             
-            # 10. ESCRIBIR DE VUELTA
-            if reemplazos_realizados > 0:
-                log("")
-                log("Escribiendo referencias actualizadas...")
-                
-                write_range_as_array(
-                    ws_inv_orig,
-                    HEADER_ROW_INV + 1,
-                    ref_col_idx,
-                    nuevas_referencias
-                )
-                
-                log(f"✅ Referencias actualizadas en INVENTARIO original")
-            else:
-                log("No se realizaron cambios")
+            log(f"")
+            log(f"✅ {reemplazos_realizados} referencias actualizadas (el resto se preservó sin cambios)")
             
-            # 11. VERIFICAR REFERENCIAS NO ENCONTRADAS
+            # 10. VERIFICAR REFERENCIAS NO ENCONTRADAS
             refs_no_encontradas = set(mapeo.keys()) - referencias_actualizadas
             
-            # 🆕 REGISTRO DE NO ENCONTRADAS PARA REPORTE
+            # Registro de no encontradas para reporte
             cambios_no_encontrados = []
             for ref_antigua in refs_no_encontradas:
                 ref_nueva = mapeo[ref_antigua]
@@ -876,7 +1265,7 @@ def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path,
                 if len(refs_no_encontradas) > 5:
                     log(f"    ... y {len(refs_no_encontradas) - 5} más")
             
-            # 🆕 12. GENERAR REPORTE EXCEL
+            # 11. GENERAR REPORTE EXCEL
             log("")
             log("Generando reporte de cambios...")
             
@@ -928,7 +1317,7 @@ def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path,
                     df_resumen = pd.DataFrame(resumen_data)
                     df_resumen.to_excel(writer, sheet_name='RESUMEN', index=False)
                 
-                # Ajustar anchos de columna
+                # Ajustar anchos de columna y formato
                 try:
                     from openpyxl import load_workbook
                     from openpyxl.styles import Font, PatternFill, Alignment
@@ -1424,15 +1813,33 @@ def cargar_distribucion(base_dir: Path) -> dict:
 def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
     """
     Carga el archivo MAYOR EXISTENCIA, hoja COSTOS INV FINAL.
-    Retorna REFERENCIA FERTRAC y REM EN CONSIG
+    Retorna REFERENCIA FERTRAC y REM EN CONSIG.
+    
+    NUEVO: Trabaja con copias temporales si el archivo está abierto.
     """
+    archivo_trabajo = None
+    es_copia_temporal = False
+    
     try:
+        # 1. Buscar archivo (ignorando temporales)
         p = find_by_prefix(base_dir, PFX_MAYOR_EXISTENCIA)
-        log(f"Abriendo Mayor Existencia: {p.name}")
+        log(f"Archivo encontrado: {p.name}")
         
-        src = open_as_excel_source(p, PASSWORDS_TRY)
+        # 2. Obtener archivo de trabajo (original o copia)
+        archivo_trabajo, es_copia_temporal = obtener_archivo_trabajo(
+            p, 
+            crear_copia_si_bloqueado=True
+        )
         
-        # Buscar hoja COSTOS INV FINAL
+        if es_copia_temporal:
+            log(f"  💡 Trabajando con copia temporal (archivo original en uso)")
+        
+        log(f"Abriendo Mayor Existencia: {archivo_trabajo.name}")
+        
+        # 3. Abrir el archivo
+        src = open_as_excel_source(archivo_trabajo, PASSWORDS_TRY)
+        
+        # 4. Buscar hoja COSTOS INV FINAL
         xf = pd.ExcelFile(src, engine="openpyxl")
         sheet_found = None
         
@@ -1444,7 +1851,6 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                 break
         
         if not sheet_found:
-            # Buscar alternativas
             for sn in xf.sheet_names:
                 sn_norm = _norm(sn)
                 if "costo" in sn_norm or "final" in sn_norm:
@@ -1456,10 +1862,10 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
             sheet_found = xf.sheet_names[0]
             log(f"  ⚠ Usando primera hoja: '{sheet_found}'")
         
-        # Leer archivo buscando el encabezado
+        # 5. Leer archivo buscando el encabezado
         df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
         
-        # Buscar fila de encabezado
+        # 6. Buscar fila de encabezado
         header_row_idx = None
         for idx in range(min(20, len(df_raw))):
             row_str = ' '.join([str(v).upper() for v in df_raw.iloc[idx] if pd.notna(v)])
@@ -1469,18 +1875,15 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                 break
         
         if header_row_idx is None:
-            # Usar header_row configurado
             header_row_idx = HEADER_ROW_MAYOR_EXIST - 1
             log(f"  ⚠ Usando fila de encabezado configurada: {HEADER_ROW_MAYOR_EXIST}")
         
-        # Leer con el encabezado correcto
+        # 7. Leer con el encabezado correcto
         df = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=header_row_idx)
         
         df.columns = [str(c).strip() for c in df.columns]
         
-        idx = {_norm(c): c for c in df.columns}
-        
-        #BUSCAR: REFERENCIA FERTRAC
+        # 8. BUSCAR: REFERENCIA FERTRAC
         ref_col = None
         for col_name in df.columns:
             col_norm = _norm(col_name)
@@ -1490,7 +1893,6 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                 break
         
         if not ref_col:
-            # Buscar solo "REFERENCIA"
             for col_name in df.columns:
                 col_norm = _norm(col_name)
                 if col_norm == "referencia" or col_norm.startswith("referencia "):
@@ -1499,7 +1901,6 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                     break
         
         if not ref_col:
-            # Buscar simplemente "REF" o columnas que contengan "referenc"
             for col_name in df.columns[:10]:
                 col_norm = _norm(col_name)
                 if "ref" in col_norm or "codigo" in col_norm:
@@ -1507,10 +1908,9 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                     log(f"Columna REFERENCIA encontrada (alternativa): '{col_name}'")
                     break
         
-        #BUSCAR: REM EN CONSIG (columna AI)
+        # 9. BUSCAR: REM EN CONSIG
         rem_consig_col = None
         
-        # Buscar exactamente "REM EN CONSIG"
         for col_name in df.columns:
             col_norm = _norm(col_name)
             if col_norm == "rem en consig":
@@ -1519,7 +1919,6 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                 break
         
         if not rem_consig_col:
-            # Buscar variantes
             for col_name in df.columns:
                 col_norm = _norm(col_name)
                 if "rem" in col_norm and "consig" in col_norm:
@@ -1528,8 +1927,6 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
                     break
         
         if not rem_consig_col:
-            # Buscar por posición (columna AI = índice 34 en Excel, pero en pandas puede variar)
-            # Buscar columnas que contengan "rem" o "consig"
             for col_name in df.columns:
                 col_norm = _norm(col_name)
                 if "consignacion" in col_norm or "consig" in col_norm:
@@ -1542,31 +1939,37 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
         if not rem_consig_col:
             raise KeyError(f"No encontré columna REM EN CONSIG en {p.name}. Columnas: {list(df.columns)}")
         
-        # Filtrar filas válidas
+        # 10. Filtrar filas válidas
         df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
         
-        # Construir DataFrame de salida
+        # 11. Construir DataFrame de salida
         out = pd.DataFrame()
         out["__REF_MAYOR__"] = df[ref_col].apply(to_num_str)
         out["__REM_CONSIG__"] = pd.to_numeric(df[rem_consig_col], errors="coerce").fillna(0)
         
-        # Eliminar duplicados
+        # 12. Eliminar duplicados
         out = out.drop_duplicates(subset=["__REF_MAYOR__"], keep="first")
         
-        # Estadísticas
+        # 13. Estadísticas
         valores_no_cero = (out["__REM_CONSIG__"] != 0).sum()
         log(f"Mayor Existencia cargada: {len(out)} referencias")
         log(f"REM EN CONSIG: {valores_no_cero} valores diferentes de cero")
+        
+        # 14. LIMPIEZA: Eliminar copia temporal si se creó
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
         
         return out
         
     except FileNotFoundError:
         log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MAYOR_EXISTENCIA}'.")
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
         return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
+        
     except Exception as e:
         log(f"⚠ ERROR al cargar Mayor Existencia: {e}")
         import traceback
         log(traceback.format_exc())
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
         return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
 
 def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: int, 
@@ -1592,26 +1995,90 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
             log(f"    MARCA SISTEMA: {' [OK]' if col_marca_sistema else '✗'}")
             return last_row
         
-        # FASE 1: ELIMINAR REFERENCIAS TIPO "0041R"
-        log(" Identificando referencias tipo '0041R' para eliminar...")
+        # FASE 1A: ELIMINAR REFERENCIAS ESPECÍFICAS DE LISTA
+        log("  Identificando referencias específicas de la lista para eliminar...")
+
+        # Lista de referencias a eliminar (puedes modificar esta lista)
+        REFERENCIAS_A_ELIMINAR = [
+            '0041R',
+            '43',
+            '42',
+            '41',
+            '44',
+            '45',
+            '47',
+            '107',
+            '5566507 FULLER ARM NO FACTURABLE',
+            'FSB5406B/TAC1711 DESARME',
+            '0041DESARME CAJA',
+            '104502-2 NO FACT',
+            '4842 NO FACTURABLE',
+            '6-4-7771-1X NO FACT'
+        ]
+
+        # Convertir a mayúsculas para comparación
+        referencias_eliminar = [ref.upper().strip() for ref in REFERENCIAS_A_ELIMINAR]
+
+        # Leer columnas necesarias para el reporte
         cols_to_read = [ref_col_idx]
+        col_nombre = hdrn_copia.get(_norm("NOMBRE MYR"))
+        col_marca = hdrn_copia.get(_norm("MARCA COPIA"))
+        col_linea = hdrn_copia.get(_norm("LINEA COPIA"))
+
+        if col_nombre:
+            cols_to_read.append(col_nombre)
+        if col_marca:
+            cols_to_read.append(col_marca)
+        if col_linea:
+            cols_to_read.append(col_linea)
+
         data = read_multiple_columns_optimized(ws_inv_copia, start_data_row, last_row, cols_to_read)
         referencias = data[ref_col_idx]
-        
+
         filas_a_eliminar = []
         for i in range(len(referencias)):
             ref = str(referencias[i]).strip() if referencias[i] not in (None, "", "None") else ""
-            if ref and ref.upper() == '0041R':
-                filas_a_eliminar.append((i, ref))
-                    
-        if filas_a_eliminar:
-            log(f"  Eliminando {len(filas_a_eliminar)} referencias tipo '0041R':")
-            for idx, ref in filas_a_eliminar[:5]:
-                log(f"    - {ref}")
-            if len(filas_a_eliminar) > 5:
-                log(f"    ... y {len(filas_a_eliminar) - 5} más")
             
-            # Eliminar en orden inverso
+            # Verificar si la referencia está en la lista de eliminación
+            if ref and ref.upper() in referencias_eliminar:
+                fila_excel = start_data_row + i
+                
+                # Obtener datos adicionales
+                nombre = str(data[col_nombre][i]) if col_nombre and i < len(data[col_nombre]) else ""
+                marca = str(data[col_marca][i]) if col_marca and i < len(data[col_marca]) else ""
+                linea = str(data[col_linea][i]) if col_linea and i < len(data[col_linea]) else ""
+                
+                # Registrar en tracker
+                TRACKER_ELIMINACIONES.registrar(
+                    paso="1. MARCAS PROPIAS - Referencias específicas",
+                    fila_excel=fila_excel,
+                    referencia=ref,
+                    nombre=nombre,
+                    marca=marca,
+                    linea=linea,
+                    motivo=f"Referencia específica en lista de eliminación ({ref})"
+                )
+                
+                filas_a_eliminar.append((i, ref))
+                        
+        if filas_a_eliminar:
+            log(f"  Eliminando {len(filas_a_eliminar)} referencias de la lista específica:")
+            
+            # Mostrar primeras 10
+            for idx, ref in filas_a_eliminar[:10]:
+                fila_excel = start_data_row + idx
+                TRACKER_ELIMINACIONES.log_eliminacion(
+                    paso="1. MARCAS PROPIAS - Referencias específicas",
+                    fila_excel=fila_excel,
+                    referencia=ref,
+                    motivo=f"Ref. específica: {ref}",
+                    mostrar_en_consola=True
+                )
+            
+            if len(filas_a_eliminar) > 10:
+                log(f"    ... y {len(filas_a_eliminar) - 10} más (ver reporte completo)")
+            
+            # IMPORTANTE: Eliminar en orden inverso para mantener índices correctos
             for idx, ref in sorted(filas_a_eliminar, reverse=True):
                 fila_excel = start_data_row + idx
                 try:
@@ -1623,7 +2090,8 @@ def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: i
             last_row = last_row - len(filas_a_eliminar)
             log(f"  {len(filas_a_eliminar)} filas eliminadas. Nuevo rango: hasta fila {last_row}")
         else:
-            log("  No se encontraron referencias tipo '####L' para eliminar")
+            log("  No se encontraron referencias de la lista específica para eliminar")
+
         
         # FASE 2: APLICAR FILTROS Y ACTUALIZAR COLUMNAS
         log("  Fase 2: Aplicando filtros y actualizando campos...")
@@ -2456,14 +2924,27 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
     Elimina registros según criterios estandarizados:
     1. NOMBRE MYR que contenga "Publicidad"
     2. REFERENCIA con patrón: 2 ceros + 2 números + letras (SIN símbolos como /)
+       ⚠️ EXCEPTO las referencias en REFERENCIAS_PROTEGIDAS
     3. NOMBRE MYR que contenga "Ajuste de precios"
     
     Retorna el nuevo last_row después de las eliminaciones.
     """
+    
+    # ✅ LISTA DE REFERENCIAS PROTEGIDAS (no se eliminarán)
+    REFERENCIAS_PROTEGIDAS = {
+        "0066A",  # Agregar aquí más referencias si es necesario
+        # "0012B",  # Ejemplo: agregar más excepciones
+    }
+    
     try:
         log("="*60)
         log("ELIMINANDO REGISTROS SEGÚN CRITERIOS ESTANDARIZADOS")
         log("="*60)
+        
+        # Mostrar referencias protegidas si existen
+        if REFERENCIAS_PROTEGIDAS:
+            log(f"📋 Referencias protegidas (NO se eliminarán): {', '.join(sorted(REFERENCIAS_PROTEGIDAS))}")
+            log("")
         
         # Buscar columnas necesarias
         col_nombre_myr = hdrn_copia.get(_norm("NOMBRE MYR"))
@@ -2481,6 +2962,7 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
         
         # Identificar filas a eliminar según los 3 criterios
         filas_a_eliminar = []
+        referencias_protegidas_encontradas = []
         
         log(f"Analizando {len(referencias)} registros...")
         
@@ -2495,14 +2977,19 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
                 motivo_eliminacion = "Publicidad en NOMBRE MYR"
             
             # CRITERIO 2: REFERENCIA con patrón 00##Letras (sin símbolos como /)
-            # Ejemplo: 0041R, 0012AB, etc.
+            # ✅ MODIFICADO: Verificar que NO esté en la lista de protegidas
             elif ref and "/" not in ref and "\\" not in ref:
                 # Verificar patrón: 2 ceros iniciales + 2 dígitos + letras
                 import re
-                # Patrón: exactamente 2 ceros, seguido de exactamente 2 dígitos, seguido de al menos una letra
                 patron = r'^00\d{2}[A-Za-z]+$'
+                
                 if re.match(patron, ref):
-                    motivo_eliminacion = "Patrón 00##Letras en REFERENCIA"
+                    # ✅ VERIFICAR SI ESTÁ PROTEGIDA
+                    if ref in REFERENCIAS_PROTEGIDAS:
+                        referencias_protegidas_encontradas.append(ref)
+                        # NO eliminar - continuar al siguiente registro
+                    else:
+                        motivo_eliminacion = "Patrón 00##Letras en REFERENCIA"
             
             # CRITERIO 3: NOMBRE MYR contiene "Ajuste de precios"
             if not motivo_eliminacion and "ajuste de precios" in nombre.lower():
@@ -2511,6 +2998,12 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
             # Si cumple algún criterio, agregar a lista de eliminación
             if motivo_eliminacion:
                 filas_a_eliminar.append((i, ref, nombre, motivo_eliminacion))
+        
+        # Mostrar referencias protegidas que se encontraron
+        if referencias_protegidas_encontradas:
+            log("")
+            log(f"✅ Referencias protegidas encontradas (NO eliminadas): {', '.join(set(referencias_protegidas_encontradas))}")
+            log("")
         
         # Eliminar filas
         if filas_a_eliminar:
@@ -2546,11 +3039,11 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
             # Actualizar last_row
             last_row = last_row - len(filas_a_eliminar)
             log(f"")
-            log(f" [OK] {len(filas_a_eliminar)} filas eliminadas exitosamente")
-            log(f" [OK] Nuevo rango: hasta fila {last_row}")
+            log(f"✓ {len(filas_a_eliminar)} filas eliminadas exitosamente")
+            log(f"✓ Nuevo rango: hasta fila {last_row}")
             log(f"")
         else:
-            log(" [OK] No se encontraron registros que cumplan los criterios de eliminación")
+            log("✓ No se encontraron registros que cumplan los criterios de eliminación")
             log("")
         
         return last_row
@@ -3027,6 +3520,9 @@ def main():
     archivo_generado = None
     estadisticas = {}
     try:
+
+        inicializar_sistema_copias_temporales()
+
         if not HAS_COM:
             raise RuntimeError("Este script requiere Excel COM (win32com). Instálalo y ejecuta en Windows con Excel.")
 
@@ -5354,18 +5850,22 @@ def main():
         log("== Proceso completado exitosamente ==")
         
     except FileNotFoundError as e:
-        # Error de archivo no encontrado
+        # ❌ Error de archivo no encontrado (incluyendo INVENTARIO ACTUALIZADO)
         log(f"\n❌ ERROR CRÍTICO: Archivo no encontrado")
         log(f"   {str(e)}")
         
         import traceback
         tb_str = traceback.format_exc()
         
-        # Intentar extraer nombre del archivo
-        archivo_faltante = str(e).split("'")[1] if "'" in str(e) else None
+        # Intentar extraer nombre del archivo del mensaje de error
+        archivo_faltante = None
+        if "INVENTARIO GENERAL ACTUALIZADO" in str(e):
+            archivo_faltante = "INVENTARIO GENERAL ACTUALIZADO (del día actual)"
         
         enviar_correo_error(e, tb_str, archivo_faltante)
-        raise
+        
+        # ⚠️ IMPORTANTE: Detener el proceso completamente
+        raise SystemExit(1)  # Salir con código de error
         
     except Exception as e:
         # Cualquier otro error
@@ -5376,7 +5876,9 @@ def main():
         log(tb_str)
         
         enviar_correo_error(e, tb_str)
-        raise
+        
+        # Salir con error
+        raise SystemExit(1)
     
     finally:
         # ===== ENVIAR CORREO SEGÚN RESULTADO =====

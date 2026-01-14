@@ -901,7 +901,7 @@ def read_excel_header_at(path: Path, sheet: str | int, header_row_visible: int) 
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
-# ==== LECTURA DE INSUMOS ====
+
 # ==== LECTURA DE INSUMOS ====
 def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
     """ERP preferido; si no hay, cae en PLANTILLA."""

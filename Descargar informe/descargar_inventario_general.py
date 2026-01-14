@@ -43,7 +43,7 @@ URL_INVENTARIO = "https://erp.fertrac.com/web#action=246&model=stock.picking.typ
 URL_PRODUCTOS = "https://erp.fertrac.com/web#action=278&model=product.template&view_type=kanban&menu_id=174"
 
 # Ruta base para descargas
-RUTA_BASE = r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2025\INFORMES\INVENTARIO GENERAL ACTUALIZADO"
+RUTA_BASE = r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026\INFORMES\INVENTARIO GENERAL ACTUALIZADO"
 
 # Configuracion
 MODO_HEADLESS = False
@@ -54,7 +54,7 @@ EMAIL_CONFIG = {
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,
     "sender_email": "analista_automatizacion@fertrac.com",
-    "sender_password": "lsda jbbr bnsw nlbe",  # Contraseña de aplicación de Google
+    "sender_password": "lbih abom caxy pzbh",  # Contraseña de aplicación de Google
     "recipient_emails": [
         "analista_automatizacion@fertrac.com",
         "data_science@fertrac.com,",
