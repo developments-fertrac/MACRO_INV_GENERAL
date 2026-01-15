@@ -3592,132 +3592,141 @@ def enviar_correo_exito(archivo_generado: Path, estadisticas: dict):
 
 def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
     """
-    Convierte texto a número en columnas A y B de INV LISTA PRECIOS.
-    Proceso: Seleccionar desde fila 2 hasta última fila y aplicar "Convertir en número"
-    
-    Args:
-        wb: Workbook de Excel abierto (COM object)
-        excel: Aplicación Excel (COM object)
+    Convierte SOLO textos numéricos puros (1–12 dígitos) a número.
+    Loguea y deja como texto cualquier cosa dudosa para revisar.
     """
-    import traceback  # ← Import dentro de la función
-    
-    log(f"\n🔢 Convirtiendo texto a número en INV LISTA PRECIOS (columnas A y B)...")
-    
+    import traceback
+
+    log("\n🔢 Convirtiendo texto a número en INV LISTA PRECIOS (columnas A y B)...")
+
     try:
-        # 1. BUSCAR HOJA INV LISTA PRECIOS
+        # 1. Buscar hoja
         ws_lp = None
         target_norm = _norm(SHEET_INV_LISTA)
-        
+
         for i in range(1, wb.Worksheets.Count + 1):
             sheet_name = wb.Worksheets(i).Name
             if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
                 ws_lp = wb.Worksheets(i)
                 log(f"  → Hoja encontrada: '{sheet_name}'")
                 break
-        
+
         if ws_lp is None:
-            # Búsqueda alternativa por palabras clave
             for i in range(1, wb.Worksheets.Count + 1):
                 sheet_name_norm = _norm(wb.Worksheets(i).Name)
                 if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
                     ws_lp = wb.Worksheets(i)
                     log(f"  → Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
                     break
-        
+
         if not ws_lp:
             log(f"  ⚠️ No se encontró la hoja '{SHEET_INV_LISTA}'")
             return
-        
-        # 2. DEFINIR COLUMNAS Y FILA DE INICIO
+
         columnas = {
             'A': {'idx': 1, 'nombre': 'REFERENCIA FERTRAC'},
             'B': {'idx': 2, 'nombre': 'REFERENCIA LISTA DE PRECIOS'}
         }
-        
-        primera_fila_datos = 2  # Desde fila 2 según requerimiento
-        
-        log(f"  → Fila de inicio de datos: {primera_fila_datos}")
-        
-        # 3. CREAR CELDA TEMPORAL CON VALOR 1
-        col_temp = ws_lp.Columns.Count
-        temp_cell = ws_lp.Cells(1, col_temp)
-        temp_cell.Value = 1
-        
-        # 4. PROCESAR CADA COLUMNA (A y B)
+
+        primera_fila_datos = 2
+        patron_numerico = re.compile(r"^\d{1,12}$")  # 1–12 dígitos
+
         for letra_col, info in columnas.items():
             col_idx = info['idx']
-            nombre_esperado = info['nombre']
-            
-            log(f"\n  📍 Procesando columna {letra_col} ({nombre_esperado})...")
-            
+            log(f"\n  📍 Procesando columna {letra_col} ({info['nombre']})...")
+
             try:
-                # Verificar encabezado (fila 1)
-                header_val = ws_lp.Cells(1, col_idx).Value
-                log(f"     → Encabezado encontrado: '{header_val}'")
-                
-                # Encontrar última fila con datos en esta columna
-                ultima_fila = ws_lp.Cells(ws_lp.Rows.Count, col_idx).End(-4162).Row  # -4162 = xlUp
-                
-                # Validar que hay datos después de la fila 2
+                ultima_fila = ws_lp.Cells(ws_lp.Rows.Count, col_idx).End(-4162).Row
                 if ultima_fila < primera_fila_datos:
-                    log(f"     ⚠️ No hay datos desde fila {primera_fila_datos} en columna {letra_col}")
+                    log(f"     ⚠️ No hay datos desde fila {primera_fila_datos}")
                     continue
-                
-                log(f"     → Rango: {letra_col}{primera_fila_datos}:{letra_col}{ultima_fila}")
-                log(f"     → Total de celdas: {ultima_fila - primera_fila_datos + 1}")
-                
-                # Copiar celda temporal (valor 1)
-                temp_cell.Copy()
-                
-                # Seleccionar rango
-                ref_range = ws_lp.Range(
-                    ws_lp.Cells(primera_fila_datos, col_idx),
-                    ws_lp.Cells(ultima_fila, col_idx)
-                )
-                
-                # Aplicar PasteSpecial con Multiply (conversión a número)
-                ref_range.PasteSpecial(
-                    Paste=-4163,      # xlPasteAll
-                    Operation=4,      # xlPasteSpecialOperationMultiply
-                    SkipBlanks=False,
-                    Transpose=False
-                )
-                
-                log(f"     ✅ Conversión aplicada")
-                
-                # Verificación (primeras 3 celdas)
-                log(f"     🔍 Verificación (primeras 3 valores):")
-                for i in range(min(3, ultima_fila - primera_fila_datos + 1)):
-                    fila = primera_fila_datos + i
+
+                for fila in range(primera_fila_datos, ultima_fila + 1):
                     celda = ws_lp.Cells(fila, col_idx)
-                    valor = celda.Value
-                    
-                    if valor is not None:
-                        tipo_python = type(valor).__name__
+                    val = celda.Value
+
+                    if val is None:
+                        continue
+
+                    original = str(val).strip()
+
+                    # 1) Si contiene '/', '-', espacio u otro símbolo raro → siempre texto
+                    if any(ch in original for ch in ["/", "-", " "]):
+                        celda.NumberFormat = "@"
+                        celda.Value = original
                         try:
-                            es_numero_excel = (celda.NumberFormat != "@")
-                            estado = "✓ NUM" if es_numero_excel else "⚠️ TXT"
+                            celda.Errors(3).Ignore = True  # xlNumberAsText
                         except:
-                            estado = "?"
-                        
-                        # Mostrar valor truncado si es muy largo
-                        valor_display = str(valor)[:30] + "..." if len(str(valor)) > 30 else valor
-                        log(f"        {letra_col}{fila}: {valor_display} ({tipo_python}, {estado})")
-                
+                            pass
+                        continue
+
+                    # 2) Solo dígitos (1–12) → candidata
+                    if not patron_numerico.match(original):
+                        celda.NumberFormat = "@"
+                        celda.Value = original
+                        try:
+                            celda.Errors(3).Ignore = True
+                        except:
+                            pass
+                        continue
+
+                    # 3) Convertir a número, pero con filtro de seguridad
+                    n = int(original)
+
+                    # ⚠️ Regla para tus dos casos que quedan como 1,00xxx:
+                    # si n == 1 pero el texto original tenía más de un carácter → NO convertir
+                    if n == 1 and len(original) > 1:
+                        celda.NumberFormat = "@"
+                        celda.Value = original
+                        try:
+                            celda.Errors(3).Ignore = True
+                        except:
+                            pass
+                        continue
+
+                    # Si pasa las reglas anteriores, sí se convierte
+                    celda.Value = n
+                    celda.NumberFormat = "0"
+                    # Hasta aquí es candidata a número
+                    try:
+                        n = int(original)
+                    except ValueError:
+                        celda.NumberFormat = "@"
+                        celda.Value = original
+                        continue
+
+                    # Guardamos para debug antes/después
+                    antes = celda.Value
+                    celda.Value = n
+                    celda.NumberFormat = "0"  # sin notación científica
+
+                    despues = celda.Value
+
+                    # Si tras convertir aparece un '/', logueamos como caso problemático
+                    if isinstance(despues, str) and "/" in despues:
+                        log(f"     ⚠️ POSIBLE PROBLEMA {letra_col}{fila}: antes='{antes}' después='{despues}'")
+
+                # Verificación de primeras filas
+                log(f"     🔍 Verificación rápida:")
+                for i in range(3):
+                    fila = primera_fila_datos + i
+                    if fila > ultima_fila:
+                        break
+                    c = ws_lp.Cells(fila, col_idx)
+                    log(f"        {letra_col}{fila}: '{c.Value}' (NF={c.NumberFormat})")
+
             except Exception as e:
                 log(f"     ❌ Error en columna {letra_col}: {e}")
+                log(traceback.format_exc())
                 continue
-        
-        # 5. LIMPIAR
-        excel.CutCopyMode = False
-        temp_cell.ClearContents()
-        
-        log(f"\n  ✅ Conversión completada en columnas A y B de INV LISTA PRECIOS")
-        
+
+        log("\n  ✅ Conversión condicional finalizada")
+
     except Exception as e:
         log(f"  ❌ Error general al convertir columnas: {e}")
         log(traceback.format_exc())
 
+        
 # ==== PROCESO PRINCIPAL ====
 def main():
 
