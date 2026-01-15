@@ -3590,17 +3590,89 @@ def enviar_correo_exito(archivo_generado: Path, estadisticas: dict):
         import traceback
         log(traceback.format_exc())
 
+import re
+
 def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
     """
     Convierte SOLO textos numéricos puros (1–12 dígitos) a número.
-    Loguea y deja como texto cualquier cosa dudosa para revisar.
+    Aplica la lógica en:
+      - Hoja INV LISTA PRECIOS, columnas A y B desde fila 2
+      - Hoja INVENTARIO, columna A desde fila 3
     """
     import traceback
 
-    log("\n🔢 Convirtiendo texto a número en INV LISTA PRECIOS (columnas A y B)...")
+    patron_numerico = re.compile(r"^\d{1,12}$")  # 1–12 dígitos
+
+    def procesar_rango(ws, col_idx, primera_fila, nombre_col):
+        log(f"\n  📍 Procesando hoja '{ws.Name}' col {nombre_col} (col_idx={col_idx})...")
+
+        ultima_fila = ws.Cells(ws.Rows.Count, col_idx).End(-4162).Row
+        if ultima_fila < primera_fila:
+            log(f"     ⚠️ No hay datos desde fila {primera_fila}")
+            return
+
+        for fila in range(primera_fila, ultima_fila + 1):
+            celda = ws.Cells(fila, col_idx)
+            val = celda.Value
+            if val is None:
+                continue
+
+            original = str(val).strip()
+
+            # 1) Si contiene '/', '-', espacio u otro símbolo raro → siempre texto
+            if any(ch in original for ch in ["/", "-", " "]):
+                celda.NumberFormat = "@"
+                celda.Value = original
+                try:
+                    celda.Errors(3).Ignore = True  # xlNumberAsText
+                except:
+                    pass
+                continue
+
+            # 2) Solo dígitos (1–12) → candidata
+            if not patron_numerico.match(original):
+                celda.NumberFormat = "@"
+                celda.Value = original
+                try:
+                    celda.Errors(3).Ignore = True
+                except:
+                    pass
+                continue
+
+            # 3) Convertir a número, con filtro de seguridad
+            try:
+                n = int(original)
+            except ValueError:
+                celda.NumberFormat = "@"
+                celda.Value = original
+                continue
+
+            # Si n == 1 pero el texto original tenía más de un carácter → NO convertir
+            if n == 1 and len(original) > 1:
+                celda.NumberFormat = "@"
+                celda.Value = original
+                try:
+                    celda.Errors(3).Ignore = True
+                except:
+                    pass
+                continue
+
+            celda.Value = n
+            celda.NumberFormat = "0"  # sin notación científica
+
+        # Verificación rápida
+        log(f"     🔍 Verificación rápida en '{ws.Name}' col {nombre_col}:")
+        for i in range(3):
+            fila = primera_fila + i
+            if fila > ultima_fila:
+                break
+            c = ws.Cells(fila, col_idx)
+            log(f"        {nombre_col}{fila}: '{c.Value}' (NF={c.NumberFormat})")
+
+    log("\n🔢 Convirtiendo texto a número en INV LISTA PRECIOS (columnas A y B) e INVENTARIO...")
 
     try:
-        # 1. Buscar hoja
+        # === 1) INV LISTA PRECIOS (como ya lo tenías) ===
         ws_lp = None
         target_norm = _norm(SHEET_INV_LISTA)
 
@@ -3608,7 +3680,7 @@ def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
             sheet_name = wb.Worksheets(i).Name
             if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
                 ws_lp = wb.Worksheets(i)
-                log(f"  → Hoja encontrada: '{sheet_name}'")
+                log(f"  → Hoja lista precios encontrada: '{sheet_name}'")
                 break
 
         if ws_lp is None:
@@ -3616,111 +3688,36 @@ def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
                 sheet_name_norm = _norm(wb.Worksheets(i).Name)
                 if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
                     ws_lp = wb.Worksheets(i)
-                    log(f"  → Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                    log(f"  → Hoja lista precios encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
                     break
 
-        if not ws_lp:
+        if ws_lp:
+            columnas_lp = {
+                'A': 1,  # REFERENCIA FERTRAC
+                'B': 2,  # REFERENCIA LISTA DE PRECIOS
+            }
+            for letra, idx in columnas_lp.items():
+                procesar_rango(ws_lp, idx, primera_fila=2, nombre_col=letra)
+        else:
             log(f"  ⚠️ No se encontró la hoja '{SHEET_INV_LISTA}'")
-            return
 
-        columnas = {
-            'A': {'idx': 1, 'nombre': 'REFERENCIA FERTRAC'},
-            'B': {'idx': 2, 'nombre': 'REFERENCIA LISTA DE PRECIOS'}
-        }
+        # === 2) INVENTARIO, columna A desde fila 3 ===
+        ws_inv = None
+        target_inv = _norm("INVENTARIO")
 
-        primera_fila_datos = 2
-        patron_numerico = re.compile(r"^\d{1,12}$")  # 1–12 dígitos
+        for i in range(1, wb.Worksheets.Count + 1):
+            sheet_name = wb.Worksheets(i).Name
+            if _norm(sheet_name) == target_inv or target_inv in _norm(sheet_name):
+                ws_inv = wb.Worksheets(i)
+                log(f"  → Hoja inventario encontrada: '{sheet_name}'")
+                break
 
-        for letra_col, info in columnas.items():
-            col_idx = info['idx']
-            log(f"\n  📍 Procesando columna {letra_col} ({info['nombre']})...")
+        if ws_inv:
+            procesar_rango(ws_inv, col_idx=1, primera_fila=3, nombre_col="A")
+        else:
+            log("  ⚠️ No se encontró la hoja 'INVENTARIO'")
 
-            try:
-                ultima_fila = ws_lp.Cells(ws_lp.Rows.Count, col_idx).End(-4162).Row
-                if ultima_fila < primera_fila_datos:
-                    log(f"     ⚠️ No hay datos desde fila {primera_fila_datos}")
-                    continue
-
-                for fila in range(primera_fila_datos, ultima_fila + 1):
-                    celda = ws_lp.Cells(fila, col_idx)
-                    val = celda.Value
-
-                    if val is None:
-                        continue
-
-                    original = str(val).strip()
-
-                    # 1) Si contiene '/', '-', espacio u otro símbolo raro → siempre texto
-                    if any(ch in original for ch in ["/", "-", " "]):
-                        celda.NumberFormat = "@"
-                        celda.Value = original
-                        try:
-                            celda.Errors(3).Ignore = True  # xlNumberAsText
-                        except:
-                            pass
-                        continue
-
-                    # 2) Solo dígitos (1–12) → candidata
-                    if not patron_numerico.match(original):
-                        celda.NumberFormat = "@"
-                        celda.Value = original
-                        try:
-                            celda.Errors(3).Ignore = True
-                        except:
-                            pass
-                        continue
-
-                    # 3) Convertir a número, pero con filtro de seguridad
-                    n = int(original)
-
-                    # ⚠️ Regla para tus dos casos que quedan como 1,00xxx:
-                    # si n == 1 pero el texto original tenía más de un carácter → NO convertir
-                    if n == 1 and len(original) > 1:
-                        celda.NumberFormat = "@"
-                        celda.Value = original
-                        try:
-                            celda.Errors(3).Ignore = True
-                        except:
-                            pass
-                        continue
-
-                    # Si pasa las reglas anteriores, sí se convierte
-                    celda.Value = n
-                    celda.NumberFormat = "0"
-                    # Hasta aquí es candidata a número
-                    try:
-                        n = int(original)
-                    except ValueError:
-                        celda.NumberFormat = "@"
-                        celda.Value = original
-                        continue
-
-                    # Guardamos para debug antes/después
-                    antes = celda.Value
-                    celda.Value = n
-                    celda.NumberFormat = "0"  # sin notación científica
-
-                    despues = celda.Value
-
-                    # Si tras convertir aparece un '/', logueamos como caso problemático
-                    if isinstance(despues, str) and "/" in despues:
-                        log(f"     ⚠️ POSIBLE PROBLEMA {letra_col}{fila}: antes='{antes}' después='{despues}'")
-
-                # Verificación de primeras filas
-                log(f"     🔍 Verificación rápida:")
-                for i in range(3):
-                    fila = primera_fila_datos + i
-                    if fila > ultima_fila:
-                        break
-                    c = ws_lp.Cells(fila, col_idx)
-                    log(f"        {letra_col}{fila}: '{c.Value}' (NF={c.NumberFormat})")
-
-            except Exception as e:
-                log(f"     ❌ Error en columna {letra_col}: {e}")
-                log(traceback.format_exc())
-                continue
-
-        log("\n  ✅ Conversión condicional finalizada")
+        log("\n  ✅ Conversión condicional finalizada en ambas hojas")
 
     except Exception as e:
         log(f"  ❌ Error general al convertir columnas: {e}")
