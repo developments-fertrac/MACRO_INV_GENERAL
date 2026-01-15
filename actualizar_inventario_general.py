@@ -3590,6 +3590,134 @@ def enviar_correo_exito(archivo_generado: Path, estadisticas: dict):
         import traceback
         log(traceback.format_exc())
 
+def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
+    """
+    Convierte texto a número en columnas A y B de INV LISTA PRECIOS.
+    Proceso: Seleccionar desde fila 2 hasta última fila y aplicar "Convertir en número"
+    
+    Args:
+        wb: Workbook de Excel abierto (COM object)
+        excel: Aplicación Excel (COM object)
+    """
+    import traceback  # ← Import dentro de la función
+    
+    log(f"\n🔢 Convirtiendo texto a número en INV LISTA PRECIOS (columnas A y B)...")
+    
+    try:
+        # 1. BUSCAR HOJA INV LISTA PRECIOS
+        ws_lp = None
+        target_norm = _norm(SHEET_INV_LISTA)
+        
+        for i in range(1, wb.Worksheets.Count + 1):
+            sheet_name = wb.Worksheets(i).Name
+            if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                ws_lp = wb.Worksheets(i)
+                log(f"  → Hoja encontrada: '{sheet_name}'")
+                break
+        
+        if ws_lp is None:
+            # Búsqueda alternativa por palabras clave
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                    ws_lp = wb.Worksheets(i)
+                    log(f"  → Hoja encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
+                    break
+        
+        if not ws_lp:
+            log(f"  ⚠️ No se encontró la hoja '{SHEET_INV_LISTA}'")
+            return
+        
+        # 2. DEFINIR COLUMNAS Y FILA DE INICIO
+        columnas = {
+            'A': {'idx': 1, 'nombre': 'REFERENCIA FERTRAC'},
+            'B': {'idx': 2, 'nombre': 'REFERENCIA LISTA DE PRECIOS'}
+        }
+        
+        primera_fila_datos = 2  # Desde fila 2 según requerimiento
+        
+        log(f"  → Fila de inicio de datos: {primera_fila_datos}")
+        
+        # 3. CREAR CELDA TEMPORAL CON VALOR 1
+        col_temp = ws_lp.Columns.Count
+        temp_cell = ws_lp.Cells(1, col_temp)
+        temp_cell.Value = 1
+        
+        # 4. PROCESAR CADA COLUMNA (A y B)
+        for letra_col, info in columnas.items():
+            col_idx = info['idx']
+            nombre_esperado = info['nombre']
+            
+            log(f"\n  📍 Procesando columna {letra_col} ({nombre_esperado})...")
+            
+            try:
+                # Verificar encabezado (fila 1)
+                header_val = ws_lp.Cells(1, col_idx).Value
+                log(f"     → Encabezado encontrado: '{header_val}'")
+                
+                # Encontrar última fila con datos en esta columna
+                ultima_fila = ws_lp.Cells(ws_lp.Rows.Count, col_idx).End(-4162).Row  # -4162 = xlUp
+                
+                # Validar que hay datos después de la fila 2
+                if ultima_fila < primera_fila_datos:
+                    log(f"     ⚠️ No hay datos desde fila {primera_fila_datos} en columna {letra_col}")
+                    continue
+                
+                log(f"     → Rango: {letra_col}{primera_fila_datos}:{letra_col}{ultima_fila}")
+                log(f"     → Total de celdas: {ultima_fila - primera_fila_datos + 1}")
+                
+                # Copiar celda temporal (valor 1)
+                temp_cell.Copy()
+                
+                # Seleccionar rango
+                ref_range = ws_lp.Range(
+                    ws_lp.Cells(primera_fila_datos, col_idx),
+                    ws_lp.Cells(ultima_fila, col_idx)
+                )
+                
+                # Aplicar PasteSpecial con Multiply (conversión a número)
+                ref_range.PasteSpecial(
+                    Paste=-4163,      # xlPasteAll
+                    Operation=4,      # xlPasteSpecialOperationMultiply
+                    SkipBlanks=False,
+                    Transpose=False
+                )
+                
+                log(f"     ✅ Conversión aplicada")
+                
+                # Verificación (primeras 3 celdas)
+                log(f"     🔍 Verificación (primeras 3 valores):")
+                for i in range(min(3, ultima_fila - primera_fila_datos + 1)):
+                    fila = primera_fila_datos + i
+                    celda = ws_lp.Cells(fila, col_idx)
+                    valor = celda.Value
+                    
+                    if valor is not None:
+                        tipo_python = type(valor).__name__
+                        try:
+                            es_numero_excel = (celda.NumberFormat != "@")
+                            estado = "✓ NUM" if es_numero_excel else "⚠️ TXT"
+                        except:
+                            estado = "?"
+                        
+                        # Mostrar valor truncado si es muy largo
+                        valor_display = str(valor)[:30] + "..." if len(str(valor)) > 30 else valor
+                        log(f"        {letra_col}{fila}: {valor_display} ({tipo_python}, {estado})")
+                
+            except Exception as e:
+                log(f"     ❌ Error en columna {letra_col}: {e}")
+                continue
+        
+        # 5. LIMPIAR
+        excel.CutCopyMode = False
+        temp_cell.ClearContents()
+        
+        log(f"\n  ✅ Conversión completada en columnas A y B de INV LISTA PRECIOS")
+        
+    except Exception as e:
+        log(f"  ❌ Error general al convertir columnas: {e}")
+        log(traceback.format_exc())
+
 # ==== PROCESO PRINCIPAL ====
 def main():
 
@@ -5252,6 +5380,20 @@ def main():
             import traceback
             log(traceback.format_exc())
 
+        # =================== NUEVO: CONVERTIR TEXTO A NÚMERO EN INV LISTA PRECIOS ===================
+        log("")
+        log("="*70)
+        log("CONVERTIR TEXTO A NÚMERO EN INV LISTA PRECIOS (COLUMNAS A y B)")
+        log("="*70)
+
+        try:
+            convertir_texto_a_numero_columnas_inv_lista(wb, excel)
+        except Exception as e:
+            log(f"❌ Error al convertir texto a número en INV LISTA PRECIOS: {e}")
+            import traceback
+            log(traceback.format_exc())
+
+        log("")
         
         # 18) GUARDADO COMO ARCHIVO NUEVO 
         log("Preparando guardado del archivo...")
