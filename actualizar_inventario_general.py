@@ -52,7 +52,7 @@ PFX_VAL_FALT         = "VALORIZADO FALTANTES"
 PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
 PFX_MARCAS           = "MARCAS"
 PFX_DISTRIBUCION     = "DISTRIBUCION DE MATRICES"
-PFX_MAYOR_EXISTENCIA = "2026 INVENTARIO MYR EXISTENCIA"
+PFX_CONSOLIDADO_REMISIONES = "CONSOLIDADO REMISIONES 2019-2026"  
 PFX_MATRIZ_USD = "2026 MATRIZ USD"
 
 def buscar_hoja_por_patron(workbook, patron, ignorar_dolares=True):
@@ -804,7 +804,7 @@ def com_convert_to_xlsx(path: Path, passwords: list[str] | None = None) -> Path:
     passwords = passwords or []
     excel = win32.DispatchEx("Excel.Application")
     excel.Visible = False
-    excel.DisplayAlerts = False
+    excel.DisplayAlerts = True
     excel.Interactive = False
     excel.EnableEvents = False
     excel.ScreenUpdating = False
@@ -1849,22 +1849,20 @@ def cargar_distribucion(base_dir: Path) -> dict:
         log(traceback.format_exc())
         return {'gestor': {}, 'clasificacion': {}}
     
-def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
+def cargar_consolidado_remisiones(base_dir: Path) -> pd.DataFrame:
     """
-    Carga el archivo MAYOR EXISTENCIA, hoja COSTOS INV FINAL.
-    Retorna REFERENCIA FERTRAC y REM EN CONSIG.
-    
-    NUEVO: Trabaja con copias temporales si el archivo está abierto.
+    Carga el archivo CONSOLIDADO REMISIONES 2019-2026, hojas RM y RMC.
+    Retorna REFERENCIA, CANT RM y CANT RMC desde tablas dinámicas.
     """
     archivo_trabajo = None
     es_copia_temporal = False
     
     try:
-        # 1. Buscar archivo (ignorando temporales)
-        p = find_by_prefix(base_dir, PFX_MAYOR_EXISTENCIA)
+        # 1. Buscar archivo usando la constante global
+        p = find_by_prefix(base_dir, PFX_CONSOLIDADO_REMISIONES)  # ✅ Usa la constante
         log(f"Archivo encontrado: {p.name}")
         
-        # 2. Obtener archivo de trabajo (original o copia)
+        # 2. Obtener archivo de trabajo
         archivo_trabajo, es_copia_temporal = obtener_archivo_trabajo(
             p, 
             crear_copia_si_bloqueado=True
@@ -1873,143 +1871,155 @@ def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
         if es_copia_temporal:
             log(f"  💡 Trabajando con copia temporal (archivo original en uso)")
         
-        log(f"Abriendo Mayor Existencia: {archivo_trabajo.name}")
+        log(f"Abriendo Consolidado Remisiones: {archivo_trabajo.name}")
         
-        # 3. Abrir el archivo
+        # 3. Abrir archivo
         src = open_as_excel_source(archivo_trabajo, PASSWORDS_TRY)
-        
-        # 4. Buscar hoja COSTOS INV FINAL
         xf = pd.ExcelFile(src, engine="openpyxl")
-        sheet_found = None
         
-        for sn in xf.sheet_names:
-            sn_norm = _norm(sn)
-            if "costos" in sn_norm and "inv" in sn_norm and "final" in sn_norm:
-                sheet_found = sn
-                log(f"Hoja encontrada: '{sn}'")
-                break
+        # 4. Diccionarios para almacenar datos por hoja
+        datos_rm = {}
+        datos_rmc = {}
         
-        if not sheet_found:
-            for sn in xf.sheet_names:
-                sn_norm = _norm(sn)
-                if "costo" in sn_norm or "final" in sn_norm:
-                    sheet_found = sn
-                    log(f"Hoja encontrada (alternativa): '{sn}'")
-                    break
+        # 5. Procesar hoja RM
+        if "RM" in xf.sheet_names:
+            log(f"\n--- Procesando hoja: RM ---")
+            datos_rm = _procesar_hoja_tabla_dinamica(src, "RM")
+            log(f"Hoja RM: {len(datos_rm)} referencias cargadas")
+        else:
+            log("  ⚠ Hoja 'RM' no encontrada")
         
-        if not sheet_found:
-            sheet_found = xf.sheet_names[0]
-            log(f"  ⚠ Usando primera hoja: '{sheet_found}'")
+        # 6. Procesar hoja RMC
+        if "RMC" in xf.sheet_names:
+            log(f"\n--- Procesando hoja: RMC ---")
+            datos_rmc = _procesar_hoja_tabla_dinamica(src, "RMC")
+            log(f"Hoja RMC: {len(datos_rmc)} referencias cargadas")
+        else:
+            log("  ⚠ Hoja 'RMC' no encontrada")
         
-        # 5. Leer archivo buscando el encabezado
-        df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
+        # 7. Combinar datos de ambas hojas
+        todas_refs = set(datos_rm.keys()) | set(datos_rmc.keys())
         
-        # 6. Buscar fila de encabezado
-        header_row_idx = None
-        for idx in range(min(20, len(df_raw))):
-            row_str = ' '.join([str(v).upper() for v in df_raw.iloc[idx] if pd.notna(v)])
-            if ("REFERENCIA" in row_str or "REF" in row_str) and ("CONSIG" in row_str or "REM" in row_str):
-                header_row_idx = idx
-                log(f"Encabezado encontrado en fila {idx + 1}")
-                break
+        if len(todas_refs) == 0:
+            log("  ⚠ No se cargaron datos de ninguna hoja")
+            limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
+            return pd.DataFrame(columns=["__REF_CONSOL__", "__CANT_RM__", "__CANT_RMC__"])
         
-        if header_row_idx is None:
-            header_row_idx = HEADER_ROW_MAYOR_EXIST - 1
-            log(f"  ⚠ Usando fila de encabezado configurada: {HEADER_ROW_MAYOR_EXIST}")
+        # 8. Construir DataFrame final
+        out = pd.DataFrame({
+            "__REF_CONSOL__": list(todas_refs),
+            "__CANT_RM__": [datos_rm.get(ref, 0) for ref in todas_refs],
+            "__CANT_RMC__": [datos_rmc.get(ref, 0) for ref in todas_refs]
+        })
         
-        # 7. Leer con el encabezado correcto
-        df = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=header_row_idx)
+        # 9. Estadísticas
+        rm_no_cero = (out["__CANT_RM__"] != 0).sum()
+        rmc_no_cero = (out["__CANT_RMC__"] != 0).sum()
         
-        df.columns = [str(c).strip() for c in df.columns]
+        log(f"\n✅ Consolidado Remisiones cargado: {len(out)} referencias únicas")
+        log(f"   UND RM: {rm_no_cero} valores diferentes de cero")
+        log(f"   UND RMC: {rmc_no_cero} valores diferentes de cero")
         
-        # 8. BUSCAR: REFERENCIA FERTRAC
-        ref_col = None
-        for col_name in df.columns:
-            col_norm = _norm(col_name)
-            if "referencia" in col_norm and "fertrac" in col_norm:
-                ref_col = col_name
-                log(f"Columna REFERENCIA FERTRAC encontrada: '{col_name}'")
-                break
-        
-        if not ref_col:
-            for col_name in df.columns:
-                col_norm = _norm(col_name)
-                if col_norm == "referencia" or col_norm.startswith("referencia "):
-                    ref_col = col_name
-                    log(f"Columna REFERENCIA encontrada: '{col_name}'")
-                    break
-        
-        if not ref_col:
-            for col_name in df.columns[:10]:
-                col_norm = _norm(col_name)
-                if "ref" in col_norm or "codigo" in col_norm:
-                    ref_col = col_name
-                    log(f"Columna REFERENCIA encontrada (alternativa): '{col_name}'")
-                    break
-        
-        # 9. BUSCAR: REM EN CONSIG
-        rem_consig_col = None
-        
-        for col_name in df.columns:
-            col_norm = _norm(col_name)
-            if col_norm == "rem en consig":
-                rem_consig_col = col_name
-                log(f"Columna REM EN CONSIG encontrada: '{col_name}'")
-                break
-        
-        if not rem_consig_col:
-            for col_name in df.columns:
-                col_norm = _norm(col_name)
-                if "rem" in col_norm and "consig" in col_norm:
-                    rem_consig_col = col_name
-                    log(f"Columna REM EN CONSIG encontrada (variante): '{col_name}'")
-                    break
-        
-        if not rem_consig_col:
-            for col_name in df.columns:
-                col_norm = _norm(col_name)
-                if "consignacion" in col_norm or "consig" in col_norm:
-                    rem_consig_col = col_name
-                    log(f"  ⚠ Usando columna que contiene 'consig': '{col_name}'")
-                    break
-        
-        if not ref_col:
-            raise KeyError(f"No encontré columna REFERENCIA en {p.name}. Columnas: {list(df.columns)}")
-        if not rem_consig_col:
-            raise KeyError(f"No encontré columna REM EN CONSIG en {p.name}. Columnas: {list(df.columns)}")
-        
-        # 10. Filtrar filas válidas
-        df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
-        
-        # 11. Construir DataFrame de salida
-        out = pd.DataFrame()
-        out["__REF_MAYOR__"] = df[ref_col].apply(to_num_str)
-        out["__REM_CONSIG__"] = pd.to_numeric(df[rem_consig_col], errors="coerce").fillna(0)
-        
-        # 12. Eliminar duplicados
-        out = out.drop_duplicates(subset=["__REF_MAYOR__"], keep="first")
-        
-        # 13. Estadísticas
-        valores_no_cero = (out["__REM_CONSIG__"] != 0).sum()
-        log(f"Mayor Existencia cargada: {len(out)} referencias")
-        log(f"REM EN CONSIG: {valores_no_cero} valores diferentes de cero")
-        
-        # 14. LIMPIEZA: Eliminar copia temporal si se creó
+        # 10. Limpieza
         limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
         
         return out
         
     except FileNotFoundError:
-        log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MAYOR_EXISTENCIA}'.")
-        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
-        return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
+            log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_CONSOLIDADO_REMISIONES}'.")
+            limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
+            return pd.DataFrame(columns=["__REF_CONSOL__", "__CANT_RM__", "__CANT_RMC__"])
         
     except Exception as e:
-        log(f"⚠ ERROR al cargar Mayor Existencia: {e}")
+        log(f"⚠ ERROR al cargar Consolidado Remisiones: {e}")
         import traceback
         log(traceback.format_exc())
         limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
-        return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
+        return pd.DataFrame(columns=["__REF_CONSOL__", "__CANT_RM__", "__CANT_RMC__"])
+
+
+def _procesar_hoja_tabla_dinamica(src, nombre_hoja: str) -> dict:
+    """
+    Procesa una hoja de tabla dinámica y retorna dict {REFERENCIA: CANTIDAD}.
+    Busca columnas: 'Etiquetas de fila' y 'Suma de CANT PDTE X FACT'
+    """
+    try:
+        # Leer hoja completa
+        df_raw = pd.read_excel(src, sheet_name=nombre_hoja, engine="openpyxl", header=None)
+        
+        # Buscar fila de encabezado
+        header_row_idx = None
+        for idx in range(min(20, len(df_raw))):
+            row_str = ' '.join([str(v).upper() for v in df_raw.iloc[idx] if pd.notna(v)])
+            if "ETIQUETAS DE FILA" in row_str or ("SUMA" in row_str and "CANT" in row_str):
+                header_row_idx = idx
+                log(f"Encabezado encontrado en fila {idx + 1}")
+                break
+        
+        if header_row_idx is None:
+            header_row_idx = 2  # Por defecto fila 3 (índice 2) para tablas dinámicas
+            log(f"  ⚠ Usando fila 3 como encabezado por defecto")
+        
+        # Leer con encabezado
+        df = pd.read_excel(src, sheet_name=nombre_hoja, engine="openpyxl", header=header_row_idx)
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        # Buscar columna de REFERENCIA (Etiquetas de fila)
+        ref_col = None
+        for col_name in df.columns:
+            col_norm = _norm(col_name)
+            if "etiqueta" in col_norm and "fila" in col_norm:
+                ref_col = col_name
+                log(f"Columna REFERENCIA encontrada: '{col_name}'")
+                break
+        
+        if not ref_col:
+            # Buscar primera columna que no sea vacía
+            ref_col = df.columns[0]
+            log(f"  ⚠ Usando primera columna como REFERENCIA: '{ref_col}'")
+        
+        # Buscar columna de CANTIDAD (Suma de CANT PDTE X FACT)
+        cant_col = None
+        for col_name in df.columns:
+            col_norm = _norm(col_name)
+            if "suma" in col_norm and "cant" in col_norm:
+                cant_col = col_name
+                log(f"Columna CANTIDAD encontrada: '{col_name}'")
+                break
+        
+        if not cant_col:
+            # Buscar segunda columna numérica
+            for col_name in df.columns[1:]:
+                if pd.api.types.is_numeric_dtype(df[col_name]):
+                    cant_col = col_name
+                    log(f"  ⚠ Usando columna numérica como CANTIDAD: '{col_name}'")
+                    break
+        
+        if not cant_col:
+            log(f"  ⚠ No se encontró columna de CANTIDAD en '{nombre_hoja}'")
+            return {}
+        
+        # Filtrar filas válidas (excluir totales, etc.)
+        df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
+        
+        # Excluir fila de "Total general" si existe
+        df = df[~df[ref_col].astype(str).str.contains("Total", case=False, na=False)]
+        
+        # Crear diccionario {REFERENCIA: CANTIDAD}
+        resultado = {}
+        for _, row in df.iterrows():
+            ref = to_num_str(row[ref_col])
+            cant = pd.to_numeric(row[cant_col], errors="coerce")
+            
+            if ref and pd.notna(cant):
+                resultado[ref] = float(cant) if cant != 0 else 0
+        
+        return resultado
+        
+    except Exception as e:
+        log(f"  ❌ Error procesando hoja '{nombre_hoja}': {e}")
+        return {}
+
 
 def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: int, 
                                    ref_col_idx: int, hdrn_copia: dict, 
@@ -2511,7 +2521,7 @@ def excel_open(path: Path, password: str | None = None):
     """Abre con COM en modo silencioso y OPTIMIZADO."""
     excel = win32.DispatchEx("Excel.Application")
     excel.Visible = False
-    excel.DisplayAlerts = False
+    excel.DisplayAlerts = True
     excel.Interactive = False
     excel.EnableEvents = False
     excel.ScreenUpdating = False
@@ -2562,12 +2572,106 @@ def excel_open(path: Path, password: str | None = None):
         raise RuntimeError(f"No pude abrir el libro {path.name} de forma silenciosa.") from e
 
 def excel_close(excel, wb, save=True):
+    """
+    Cierra SOLO el workbook y la instancia de Excel creados por este script.
+    
+    ✅ NO afecta otros archivos Excel abiertos manualmente.
+    ✅ NO cierra otras instancias de Excel.
+    
+    Args:
+        excel: Instancia de Excel creada con DispatchEx
+        wb: Workbook específico a cerrar
+        save: Si True, guarda cambios antes de cerrar
+    """
     try:
-        if save:
-            excel.Calculation = -4105  
-        wb.Close(SaveChanges=save)
+        # ========================================
+        # 1. RESTAURAR ALERTAS Y CONFIGURACIONES
+        # ========================================
+        if excel:
+            try:
+                log("  🔔 Restaurando configuración de Excel del script...")
+                excel.DisplayAlerts = True
+                excel.ScreenUpdating = True
+                excel.Interactive = True
+                log("  ✅ Configuración restaurada")
+            except Exception as e:
+                log(f"  ⚠️ No se pudo restaurar configuración: {e}")
+        
+        # ========================================
+        # 2. CERRAR WORKBOOK ESPECÍFICO
+        # ========================================
+        if wb:
+            try:
+                # Obtener nombre del archivo para logging
+                archivo_nombre = "desconocido"
+                try:
+                    archivo_nombre = wb.Name
+                except:
+                    pass
+                
+                if save:
+                    log(f"  💾 Guardando cambios en '{archivo_nombre}'...")
+                    excel.Calculation = -4105  # xlCalculationAutomatic
+                    wb.Save()
+                    log("  ✅ Cambios guardados")
+                
+                log(f"  📕 Cerrando workbook '{archivo_nombre}'...")
+                wb.Close(SaveChanges=save)
+                log("  ✅ Workbook cerrado")
+                
+            except Exception as e:
+                log(f"  ⚠️ Error al cerrar workbook: {e}")
+                # Intentar cerrar sin guardar
+                try:
+                    wb.Close(SaveChanges=False)
+                    log("  ⚠️ Workbook cerrado SIN guardar")
+                except:
+                    pass
+        
+    except Exception as e:
+        log(f"  ❌ Error en proceso de cierre: {e}")
+    
     finally:
-        excel.Quit()
+        # ========================================
+        # 3. CERRAR INSTANCIA DE EXCEL DEL SCRIPT
+        # ========================================
+        if excel:
+            try:
+                # Obtener PID para confirmar que es nuestra instancia
+                pid = "desconocido"
+                try:
+                    import win32process
+                    import win32api
+                    hwnd = excel.Hwnd
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                except:
+                    pass
+                
+                log(f"  📊 Cerrando instancia de Excel del script (PID: {pid})...")
+                log("  ℹ️  Otros archivos Excel abiertos NO se verán afectados")
+                
+                excel.Quit()
+                log("  ✅ Instancia de Excel cerrada exitosamente")
+                
+            except Exception as e:
+                log(f"  ⚠️ Error al cerrar Excel: {e}")
+        
+        # ========================================
+        # 4. LIBERAR RECURSOS COM
+        # ========================================
+        try:
+            if wb:
+                del wb
+            if excel:
+                del excel
+        except:
+            pass
+        
+        # Forzar garbage collection
+        import gc
+        gc.collect()
+        
+        log("  🧹 Recursos COM liberados")
 
 def ws_headers(ws, header_row_visible: int) -> tuple[dict, dict]:
     """Devuelve (mapa header→col_idx, mapa normalizado→col_idx)"""
@@ -3788,12 +3892,19 @@ def main():
         distribucion = cargar_distribucion(BASE_PATH)
         log(f"Distribución: {len(distribucion['gestor'])} gestores, {len(distribucion['clasificacion'])} clasificaciones")
 
-        # Cargar Mayor Existencia
-        df_mayor_exist = cargar_mayor_existencia(BASE_PATH)
-        mayor_exist_map = df_mayor_exist.set_index("__REF_MAYOR__")["__REM_CONSIG__"].to_dict() if len(df_mayor_exist) > 0 else {}
-        if len(mayor_exist_map) > 0:
-            no_cero = sum(1 for v in mayor_exist_map.values() if v != 0)
-            log(f"Mayor Existencia: {no_cero} referencias con REM EN CONSIG diferente de cero")
+        # CARGAR CONSOLIDADO REMISIONES
+        df_consolidado = cargar_consolidado_remisiones(BASE_PATH)
+
+        # Crear mapas separados para RM y RMC
+        rm_map = df_consolidado.set_index("__REF_CONSOL__")["__CANT_RM__"].to_dict() if len(df_consolidado) > 0 else {}
+        rmc_map = df_consolidado.set_index("__REF_CONSOL__")["__CANT_RMC__"].to_dict() if len(df_consolidado) > 0 else {}
+
+        if len(df_consolidado) > 0:
+            rm_no_cero = sum(1 for v in rm_map.values() if v != 0)
+            rmc_no_cero = sum(1 for v in rmc_map.values() if v != 0)
+            log(f"Consolidado Remisiones cargado:")
+            log(f" - RM: {rm_no_cero} referencias con valores diferentes de cero")
+            log(f" - RMC: {rmc_no_cero} referencias con valores diferentes de cero")
 
         # Join de cantidades
         val_map_impo = df_val_impo.set_index("__REF_INT__")["__CANT__"]
@@ -3951,7 +4062,7 @@ def main():
 
         # 4) ELIMINAR hoja INVENTARIO COPIA si existe
         try:
-            excel.DisplayAlerts = False
+            excel.DisplayAlerts = True
             for i in range(1, wb.Worksheets.Count + 1):
                 try:
                     sheet_name = wb.Worksheets(i).Name
@@ -3978,72 +4089,44 @@ def main():
             ws_inv_copia = wb.Worksheets.Add(After=ws_inv_orig)
             ws_inv_copia.Name = SHEET_INV_COPIA
             
-            ws_inv_orig.UsedRange.Copy(Destination=ws_inv_copia.Range("A1"))
-            
+            # ✅ CORRECCIÓN CRÍTICA: Copiar en DOS pasos para evitar diálogo de contraseña
+            # Paso 1: Copiar FORMATO (sin valores ni fórmulas)
+            log("  Copiando formato de la hoja original...")
             try:
+                # Copiar anchos de columna primero
                 for col in range(1, ws_inv_orig.UsedRange.Columns.Count + 1):
                     ws_inv_copia.Columns(col).ColumnWidth = ws_inv_orig.Columns(col).ColumnWidth
+                
+                # Copiar formato de celdas (sin contenido)
+                ws_inv_orig.UsedRange.Copy()
+                ws_inv_copia.Range("A1").PasteSpecial(Paste=-4122)  # xlPasteFormats
+                excel.CutCopyMode = False
+                
+                log("  ✓ Formato copiado")
             except Exception as e:
-                log(f"Aviso: no se pudo copiar anchos de columna: {e}")
+                log(f"  ⚠ Advertencia al copiar formato: {e}")
             
-            log(f"Hoja '{SHEET_INV_COPIA}' creada exitosamente")
-            
-            
-            # ROMPER VÍNCULOS EXTERNOS: Convertir fórmulas a valores en columnas con enlaces externos
-            log("Rompiendo vínculos externos en INVENTARIO COPIA...")
+            # Paso 2: Copiar VALORES (convierte fórmulas a valores, evita vínculos externos)
+            log("  Copiando valores (sin fórmulas ni vínculos externos)...")
             try:
-                # Obtener encabezados de la copia recién creada
-                temp_hr, temp_hdr, temp_hdrn = ws_headers_smart(
-                    ws_inv_copia,
-                    expected_row=HEADER_ROW_INV,
-                    preferred_labels=["REFERENCIA", "NOMBRE LISTA", "NOMBRE MYR"]
-                )
+                ws_inv_orig.UsedRange.Copy()
+                ws_inv_copia.Range("A1").PasteSpecial(Paste=-4163)  # xlPasteValues
+                excel.CutCopyMode = False
                 
-                # Lista de columnas que suelen tener fórmulas con enlaces externos
-                columnas_a_romper = [
-                    "NOMBRE LISTA",      # Tiene fórmulas que apuntan a MATRIZ USD
-                    "NOMBRE MYR",        # Puede tener fórmulas relacionadas
-                    "REFERENCIA LISTA DE PRECIOS",  # Puede tener vínculos
-                    "PRECIO LISTA"       # Puede tener vínculos
-                ]
-                
-                columnas_rotas = 0
-                for col_name in columnas_a_romper:
-                    col_idx = temp_hdrn.get(_norm(col_name))
-                    if col_idx:
-                        try:
-                            # Seleccionar toda la columna desde el inicio de datos hasta el final usado
-                            used_range = ws_inv_copia.UsedRange
-                            last_row_temp = used_range.Rows.Count
-                            
-                            col_range = ws_inv_copia.Range(
-                                ws_inv_copia.Cells(temp_hr + 1, col_idx),
-                                ws_inv_copia.Cells(last_row_temp, col_idx)
-                            )
-                            
-                            # Convertir fórmulas a valores
-                            # Método: copiar y pegar como valores sobre sí mismo
-                            col_range.Copy()
-                            col_range.PasteSpecial(Paste=-4163)  # xlPasteValues
-                            excel.CutCopyMode = False
-                            
-                            columnas_rotas += 1
-                            log(f"   [OK] Vínculos rotos en columna: {col_name}")
-                            
-                        except Exception as e:
-                            log(f"  ⚠ No se pudo romper vínculos en {col_name}: {e}")
-                
-                if columnas_rotas > 0:
-                    log(f" [OK] {columnas_rotas} columna(s) convertida(s) a valores (vínculos externos eliminados)")
-                else:
-                    log("  ℹ No se encontraron columnas con posibles vínculos externos")
-                    
+                log("  ✓ Valores copiados (fórmulas convertidas a valores)")
             except Exception as e:
-                log(f"  ⚠ Error al romper vínculos externos: {e}")
-                # No es crítico, continuar con el proceso
+                log(f"  ❌ Error al copiar valores: {e}")
+                # Fallback: copiar todo (puede pedir contraseña)
+                log("  ⚠ Usando método de copia completa (puede requerir contraseñas)...")
+                ws_inv_orig.UsedRange.Copy(Destination=ws_inv_copia.Range("A1"))
+            
+            log(f"✅ Hoja '{SHEET_INV_COPIA}' creada exitosamente")
+            
+            # ✅ YA NO ES NECESARIO ROMPER VÍNCULOS (ya están rotos al copiar como valores)
+            log("  ℹ Vínculos externos ya eliminados (copiado como valores)")
             
         except Exception as e:
-            log(f"ERROR al crear copia: {e}")
+            log(f"❌ ERROR al crear copia: {e}")
             raise RuntimeError(f"No se pudo crear copia de la hoja INVENTARIO: {e}")
 
         if was_protected:
@@ -5213,13 +5296,12 @@ def main():
             import traceback
             log(traceback.format_exc())
         
-
-        # 17) Llenar UND REM CONSIGNACION en INV LISTA PRECIOS desde Mayor Existencia
-        log("Llenando UND REM CONSIGNACION en INV LISTA PRECIOS...")
+        # 17) Llenar UND RM y UND RMC en INV LISTA PRECIOS desde Consolidado Remisiones
+        log("Llenando UND RM y UND RMC en INV LISTA PRECIOS desde Consolidado Remisiones...")
         try:
-            # Verificar que tenemos datos de Mayor Existencia
-            if len(mayor_exist_map) == 0:
-                log("  ⚠ No hay datos de Mayor Existencia disponibles - saltando")
+            # Verificar que tenemos datos del Consolidado
+            if len(rm_map) == 0 and len(rmc_map) == 0:
+                log("  ⚠ No hay datos de Consolidado Remisiones disponibles - saltando")
             else:
                 # Buscar la hoja INV LISTA PRECIOS
                 ws_lp = None
@@ -5247,30 +5329,43 @@ def main():
                     # Buscar columnas necesarias
                     ref_fertrac_idx_lp = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
                     
-                    # Buscar columna UND REM CONSIGNACION (exacta y variantes)
-                    rem_consig_idx = (
-                        hdrn_lp.get(_norm("UND REM CONSIGNACION")) or
-                        hdrn_lp.get(_norm("UND REM CONSIG")) or
-                        hdrn_lp.get(_norm("REM CONSIGNACION")) or
-                        hdrn_lp.get(_norm("REM EN CONSIGNACION"))
+                    # Buscar columna UND RM (exacta y variantes)
+                    rm_idx = (
+                        hdrn_lp.get(_norm("UND RM")) or
+                        hdrn_lp.get(_norm("RM")) or
+                        hdrn_lp.get(_norm("UNIDADES RM"))
+                    )
+                    
+                    # Buscar columna UND RMC (exacta y variantes)
+                    rmc_idx = (
+                        hdrn_lp.get(_norm("UND RMC")) or
+                        hdrn_lp.get(_norm("RMC")) or
+                        hdrn_lp.get(_norm("UNIDADES RMC"))
                     )
                     
                     if not ref_fertrac_idx_lp:
                         log("  ⚠ Columna REFERENCIA FERTRAC no encontrada en INV LISTA PRECIOS")
-                    elif not rem_consig_idx:
-                        log("  ⚠ Columna UND REM CONSIGNACION no encontrada en INV LISTA PRECIOS")
+                    elif not rm_idx and not rmc_idx:
+                        log("  ⚠ Columnas UND RM y UND RMC no encontradas en INV LISTA PRECIOS")
                         log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
-                        # Mostrar columnas que contengan "consig" o "rem"
-                        posibles = [k for k in hdr_lp.keys() if 'consig' in _norm(k) or 'rem' in _norm(k)]
+                        # Mostrar columnas que contengan "rm" o "rmc"
+                        posibles = [k for k in hdr_lp.keys() if 'rm' in _norm(k)]
                         if posibles:
-                            log(f"     Columnas posibles con 'consig' o 'rem': {posibles}")
+                            log(f"     Columnas posibles con 'rm': {posibles}")
                     else:
-                        # Obtener el nombre real de la columna para el log
-                        col_name_real = [k for k, v in hdr_lp.items() if v == rem_consig_idx][0]
+                        # Mostrar qué columnas se encontraron
+                        columnas_encontradas = []
+                        if rm_idx:
+                            rm_col_name = [k for k, v in hdr_lp.items() if v == rm_idx][0]
+                            columnas_encontradas.append(f"UND RM: '{rm_col_name}' (índice {rm_idx})")
+                        if rmc_idx:
+                            rmc_col_name = [k for k, v in hdr_lp.items() if v == rmc_idx][0]
+                            columnas_encontradas.append(f"UND RMC: '{rmc_col_name}' (índice {rmc_idx})")
                         
                         log(f"Columnas encontradas:")
                         log(f" - REFERENCIA FERTRAC: índice {ref_fertrac_idx_lp}")
-                        log(f" - UND REM CONSIGNACION: '{col_name_real}' (índice {rem_consig_idx})")
+                        for col_info in columnas_encontradas:
+                            log(f" - {col_info}")
                         
                         # Determinar última fila con datos en INV LISTA PRECIOS
                         last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx_lp, hr_lp)
@@ -5284,46 +5379,93 @@ def main():
                         refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx_lp)
                         refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
                         
-                        # Cruzar con Mayor Existencia (REM EN CONSIG) para llenar UND REM CONSIGNACION
-                        valores_rem_consig = []
-                        matched = 0
-                        valores_no_cero = 0
-                        
-                        for ref_fertrac in refs_fertrac_lp_norm:
-                            if ref_fertrac and ref_fertrac in mayor_exist_map:
-                                val = mayor_exist_map[ref_fertrac]
-                                
-                                # Convertir a número
-                                try:
-                                    val_num = float(val) if val is not None else ""  
+                        # Procesar UND RM si existe la columna
+                        if rm_idx and len(rm_map) > 0:
+                            log("   Procesando UND RM...")
+                            valores_rm = []
+                            matched_rm = 0
+                            valores_no_cero_rm = 0
+                            
+                            for ref_fertrac in refs_fertrac_lp_norm:
+                                if ref_fertrac and ref_fertrac in rm_map:
+                                    val = rm_map[ref_fertrac]
                                     
-                                    # Si el valor es 0 desde la fuente, sí lo ponemos
-                                    if val_num == 0 or val_num == "":
-                                        valores_rem_consig.append("" if val is None or val == "" else 0)
-                                    else:
-                                        valores_rem_consig.append(val_num)
-                                        matched += 1
-                                        valores_no_cero += 1
-                                except:
-                                    valores_rem_consig.append("")  
+                                    # Convertir a número
+                                    try:
+                                        val_num = float(val) if val is not None else 0  # ✅ Cambiado de "" a 0
+                                        
+                                        if val_num == 0:
+                                            valores_rm.append(0)
+                                        else:
+                                            valores_rm.append(val_num)
+                                            matched_rm += 1
+                                            valores_no_cero_rm += 1
+                                    except:
+                                        valores_rm.append(0)  # ✅ Cambiado de "" a 0
+                                else:
+                                    # No hay coincidencia - escribir 0
+                                    valores_rm.append(0)  # ✅ Cambiado de "" a 0
+                            
+                            # Escribir UND RM
+                            write_range_as_array(ws_lp, hr_lp + 1, rm_idx, valores_rm)
+                            
+                            log(f"   UND RM actualizada:")
+                            log(f"    - Total procesado: {len(valores_rm)}")
+                            log(f"    - Coincidencias encontradas: {matched_rm}")
+                            log(f"    - Valores diferentes de cero: {valores_no_cero_rm}")
+                            log(f"    - Sin coincidencia (valor 0): {len(valores_rm) - matched_rm}")  # ✅ Agregado
+                        else:
+                            if not rm_idx:
+                                log("   ⚠ Columna UND RM no encontrada - saltando")
                             else:
-                                # No hay coincidencia - dejar en blanco
-                                valores_rem_consig.append("")  
-
-                        # Escribir en UND REM CONSIGNACION de INV LISTA PRECIOS
-                        write_range_as_array(ws_lp, hr_lp + 1, rem_consig_idx, valores_rem_consig)
+                                log("   ⚠ No hay datos RM disponibles - saltando")
                         
-                        log(f"UND REM CONSIGNACION actualizada en INV LISTA PRECIOS:")
-                        log(f" - Total procesado: {len(valores_rem_consig)}")
-                        log(f" - Coincidencias encontradas: {matched}")
-                        log(f" - Valores diferentes de cero: {valores_no_cero}")
-                        log(f" - Sin coincidencia (valor 0): {len(valores_rem_consig) - matched}")
+                        # Procesar UND RMC si existe la columna
+                        if rmc_idx and len(rmc_map) > 0:
+                            log("   Procesando UND RMC...")
+                            valores_rmc = []
+                            matched_rmc = 0
+                            valores_no_cero_rmc = 0
+                            
+                            for ref_fertrac in refs_fertrac_lp_norm:
+                                if ref_fertrac and ref_fertrac in rmc_map:
+                                    val = rmc_map[ref_fertrac]
+                                    
+                                    # Convertir a número
+                                    try:
+                                        val_num = float(val) if val is not None else 0  # ✅ Cambiado de "" a 0
+                                        
+                                        if val_num == 0:
+                                            valores_rmc.append(0)
+                                        else:
+                                            valores_rmc.append(val_num)
+                                            matched_rmc += 1
+                                            valores_no_cero_rmc += 1
+                                    except:
+                                        valores_rmc.append(0)  # ✅ Cambiado de "" a 0
+                                else:
+                                    # No hay coincidencia - escribir 0
+                                    valores_rmc.append(0)  # ✅ Cambiado de "" a 0
+                            
+                            # Escribir UND RMC
+                            write_range_as_array(ws_lp, hr_lp + 1, rmc_idx, valores_rmc)
+                            
+                            log(f"   UND RMC actualizada:")
+                            log(f"    - Total procesado: {len(valores_rmc)}")
+                            log(f"    - Coincidencias encontradas: {matched_rmc}")
+                            log(f"    - Valores diferentes de cero: {valores_no_cero_rmc}")
+                            log(f"    - Sin coincidencia (valor 0): {len(valores_rmc) - matched_rmc}")  # ✅ Agregado
+                        else:
+                            if not rmc_idx:
+                                log("   ⚠ Columna UND RMC no encontrada - saltando")
+                            else:
+                                log("   ⚠ No hay datos RMC disponibles - saltando")
                         
                 else:
                     log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
                     
         except Exception as e:
-            log(f"  ❌ ERROR al llenar UND REM CONSIGNACION: {e}")
+            log(f"  ❌ ERROR al llenar UND RM/RMC: {e}")
             import traceback
             log(traceback.format_exc())
 
