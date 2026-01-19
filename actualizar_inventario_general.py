@@ -3695,136 +3695,174 @@ def enviar_correo_exito(archivo_generado: Path, estadisticas: dict):
         log(traceback.format_exc())
 
 import re
-
 def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
     """
     Convierte SOLO textos numéricos puros (1–12 dígitos) a número.
-    Aplica la lógica en:
-      - Hoja INV LISTA PRECIOS, columnas A y B desde fila 2
-      - Hoja INVENTARIO, columna A desde fila 3
+    ULTRA-OPTIMIZADO: Minimiza accesos COM al máximo
     """
     import traceback
+    import pandas as pd
+    import numpy as np
 
-    patron_numerico = re.compile(r"^\d{1,12}$")  # 1–12 dígitos
+    patron_numerico = re.compile(r"^\d{1,12}$")
 
-    def procesar_rango(ws, col_idx, primera_fila, nombre_col):
-        log(f"\n  📍 Procesando hoja '{ws.Name}' col {nombre_col} (col_idx={col_idx})...")
+    def procesar_rango_ultra_rapido(ws, col_idx, primera_fila, nombre_col):
+        """Procesa rango con mínimos accesos COM"""
+        log(f"\n  📍 Procesando hoja '{ws.Name}' col {nombre_col}...")
 
+        # 1) Última fila (1 acceso COM)
         ultima_fila = ws.Cells(ws.Rows.Count, col_idx).End(-4162).Row
         if ultima_fila < primera_fila:
             log(f"     ⚠️ No hay datos desde fila {primera_fila}")
             return
 
-        for fila in range(primera_fila, ultima_fila + 1):
-            celda = ws.Cells(fila, col_idx)
-            val = celda.Value
-            if val is None:
-                continue
-
-            original = str(val).strip()
-
-            # 1) Si contiene '/', '-', espacio u otro símbolo raro → siempre texto
-            if any(ch in original for ch in ["/", "-", " "]):
-                celda.NumberFormat = "@"
-                celda.Value = original
-                try:
-                    celda.Errors(3).Ignore = True  # xlNumberAsText
-                except:
-                    pass
-                continue
-
-            # 2) Solo dígitos (1–12) → candidata
-            if not patron_numerico.match(original):
-                celda.NumberFormat = "@"
-                celda.Value = original
-                try:
-                    celda.Errors(3).Ignore = True
-                except:
-                    pass
-                continue
-
-            # 3) Convertir a número, con filtro de seguridad
+        total_filas = ultima_fila - primera_fila + 1
+        
+        # 2) Leer TODO el rango (1 acceso COM)
+        rango = ws.Range(ws.Cells(primera_fila, col_idx), ws.Cells(ultima_fila, col_idx))
+        valores_raw = rango.Value
+        
+        # Normalizar a lista
+        if not isinstance(valores_raw, tuple):
+            valores = [valores_raw]
+        else:
+            valores = [fila[0] if isinstance(fila, tuple) else fila for fila in valores_raw]
+        
+        # 3) Crear DataFrame para procesamiento vectorizado
+        df = pd.DataFrame({'original': valores})
+        df['original'] = df['original'].fillna('')
+        df['original_str'] = df['original'].astype(str).str.strip()
+        
+        # 4) Clasificación vectorizada (TODO en pandas, sin loops)
+        # Detectar separadores
+        tiene_separadores = df['original_str'].str.contains(r'[/\-\s]', regex=True, na=False)
+        
+        # Detectar numéricos puros (1-12 dígitos)
+        es_numerico_puro = df['original_str'].str.match(r'^\d{1,12}$', na=False)
+        
+        # Detectar "01", "001", etc (números que empiezan con 0 o son "1" con múltiples caracteres)
+        def es_texto_especial(s):
+            if pd.isna(s) or s == '':
+                return False
             try:
-                n = int(original)
-            except ValueError:
-                celda.NumberFormat = "@"
-                celda.Value = original
-                continue
+                n = int(s)
+                return n == 1 and len(s) > 1
+            except:
+                return False
+        
+        es_especial = df['original_str'].apply(es_texto_especial)
+        
+        # 5) Asignar valores finales
+        df['valor_final'] = df['original_str']  # Por defecto, texto
+        df['formato'] = '@'  # Por defecto, texto
+        
+        # Los numéricos puros que NO son especiales → convertir a número
+        mask_convertir = es_numerico_puro & ~es_especial & ~tiene_separadores
+        
+        df.loc[mask_convertir, 'valor_final'] = pd.to_numeric(
+            df.loc[mask_convertir, 'original_str'], 
+            errors='coerce'
+        ).fillna(df.loc[mask_convertir, 'original_str'])
+        
+        df.loc[mask_convertir, 'formato'] = '0'
+        
+        # 6) Preparar arrays para escritura (formato que Excel entiende)
+        valores_finales = df['valor_final'].tolist()
+        formatos_finales = df['formato'].tolist()
+        
+        # Convertir a tupla de tuplas para Excel
+        valores_excel = tuple((v,) for v in valores_finales)
+        formatos_excel = tuple((f,) for f in formatos_finales)
+        
+        # 7) CRÍTICO: Aplicar formato PRIMERO, luego valores
+        # Esto evita conflictos de conversión automática de Excel
+        try:
+            # Paso 1: Establecer TODOS los formatos (1 acceso COM)
+            rango.NumberFormat = "@"  # Primero todo a texto
+            
+            # Paso 2: Aplicar formato específico solo a números
+            indices_numericos = [i for i, fmt in enumerate(formatos_finales) if fmt == '0']
+            
+            if indices_numericos:
+                # Aplicar formato numérico solo donde corresponde
+                for idx in indices_numericos:
+                    fila = primera_fila + idx
+                    ws.Cells(fila, col_idx).NumberFormat = "0"
+            
+            # Paso 3: Escribir valores (1 acceso COM)
+            rango.Value = valores_excel
+            
+            log(f"     ✅ Procesadas {total_filas} filas ({sum(mask_convertir)} convertidas a número)")
+            
+        except Exception as e:
+            log(f"     ⚠️ Error en escritura masiva: {e}, usando método alternativo...")
+            
+            # Fallback ultra-rápido: solo escribir donde hay cambios
+            for idx in range(len(valores_finales)):
+                if mask_convertir.iloc[idx]:  # Solo procesar las que cambian
+                    fila = primera_fila + idx
+                    celda = ws.Cells(fila, col_idx)
+                    celda.NumberFormat = "0"
+                    celda.Value = valores_finales[idx]
 
-            # Si n == 1 pero el texto original tenía más de un carácter → NO convertir
-            if n == 1 and len(original) > 1:
-                celda.NumberFormat = "@"
-                celda.Value = original
-                try:
-                    celda.Errors(3).Ignore = True
-                except:
-                    pass
-                continue
-
-            celda.Value = n
-            celda.NumberFormat = "0"  # sin notación científica
-
-        # Verificación rápida
-        log(f"     🔍 Verificación rápida en '{ws.Name}' col {nombre_col}:")
-        for i in range(3):
+        # 8) Verificación (sample reducido)
+        log(f"     🔍 Sample de resultados:")
+        for i in range(min(3, total_filas)):
             fila = primera_fila + i
-            if fila > ultima_fila:
-                break
             c = ws.Cells(fila, col_idx)
-            log(f"        {nombre_col}{fila}: '{c.Value}' (NF={c.NumberFormat})")
+            tipo = "NUM" if formatos_finales[i] == '0' else "TXT"
+            log(f"        {nombre_col}{fila}: '{c.Value}' [{tipo}]")
 
-    log("\n🔢 Convirtiendo texto a número en INV LISTA PRECIOS (columnas A y B) e INVENTARIO...")
+    def buscar_hoja_rapido(wb, nombres_posibles, palabras_clave=None):
+        """Búsqueda de hoja ultra-rápida"""
+        hojas_map = {}
+        for i in range(1, wb.Worksheets.Count + 1):
+            nombre = wb.Worksheets(i).Name
+            hojas_map[_norm(nombre)] = wb.Worksheets(i)
+        
+        # Búsqueda exacta/parcial
+        for nombre in nombres_posibles:
+            nombre_norm = _norm(nombre)
+            if nombre_norm in hojas_map:
+                return hojas_map[nombre_norm]
+            for hoja_norm, hoja in hojas_map.items():
+                if nombre_norm in hoja_norm:
+                    return hoja
+        
+        # Búsqueda por palabras clave
+        if palabras_clave:
+            for hoja_norm, hoja in hojas_map.items():
+                if all(pal in hoja_norm for pal in palabras_clave):
+                    return hoja
+        
+        return None
+
+    log("\n🔢 Convirtiendo texto a número (ULTRA-OPTIMIZADO con pandas)...")
 
     try:
-        # === 1) INV LISTA PRECIOS (como ya lo tenías) ===
-        ws_lp = None
-        target_norm = _norm(SHEET_INV_LISTA)
-
-        for i in range(1, wb.Worksheets.Count + 1):
-            sheet_name = wb.Worksheets(i).Name
-            if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
-                ws_lp = wb.Worksheets(i)
-                log(f"  → Hoja lista precios encontrada: '{sheet_name}'")
-                break
-
-        if ws_lp is None:
-            for i in range(1, wb.Worksheets.Count + 1):
-                sheet_name_norm = _norm(wb.Worksheets(i).Name)
-                if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
-                    ws_lp = wb.Worksheets(i)
-                    log(f"  → Hoja lista precios encontrada (por palabras clave): '{wb.Worksheets(i).Name}'")
-                    break
-
+        # INV LISTA PRECIOS
+        ws_lp = buscar_hoja_rapido(wb, [SHEET_INV_LISTA], ["inv", "lista", "precio"])
+        
         if ws_lp:
-            columnas_lp = {
-                'A': 1,  # REFERENCIA FERTRAC
-                'B': 2,  # REFERENCIA LISTA DE PRECIOS
-            }
-            for letra, idx in columnas_lp.items():
-                procesar_rango(ws_lp, idx, primera_fila=2, nombre_col=letra)
+            log(f"  → Hoja lista precios: '{ws_lp.Name}'")
+            for letra, idx in [('A', 1), ('B', 2)]:
+                procesar_rango_ultra_rapido(ws_lp, idx, 2, letra)
         else:
-            log(f"  ⚠️ No se encontró la hoja '{SHEET_INV_LISTA}'")
+            log(f"  ⚠️ No se encontró '{SHEET_INV_LISTA}'")
 
-        # === 2) INVENTARIO, columna A desde fila 3 ===
-        ws_inv = None
-        target_inv = _norm("INVENTARIO")
-
-        for i in range(1, wb.Worksheets.Count + 1):
-            sheet_name = wb.Worksheets(i).Name
-            if _norm(sheet_name) == target_inv or target_inv in _norm(sheet_name):
-                ws_inv = wb.Worksheets(i)
-                log(f"  → Hoja inventario encontrada: '{sheet_name}'")
-                break
-
+        # INVENTARIO
+        ws_inv = buscar_hoja_rapido(wb, ["INVENTARIO"])
+        
         if ws_inv:
-            procesar_rango(ws_inv, col_idx=1, primera_fila=3, nombre_col="A")
+            log(f"  → Hoja inventario: '{ws_inv.Name}'")
+            procesar_rango_ultra_rapido(ws_inv, 1, 3, "A")
         else:
-            log("  ⚠️ No se encontró la hoja 'INVENTARIO'")
+            log("  ⚠️ No se encontró 'INVENTARIO'")
 
-        log("\n  ✅ Conversión condicional finalizada en ambas hojas")
+        log("\n  ✅ Conversión finalizada (modo ultra-rápido con pandas)")
 
     except Exception as e:
-        log(f"  ❌ Error general al convertir columnas: {e}")
+        log(f"  ❌ Error: {e}")
         log(traceback.format_exc())
 
         
