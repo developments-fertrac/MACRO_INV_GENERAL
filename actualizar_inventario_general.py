@@ -3850,17 +3850,6 @@ def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
         else:
             log(f"  ⚠️ No se encontró '{SHEET_INV_LISTA}'")
 
-        # INVENTARIO
-        ws_inv = buscar_hoja_rapido(wb, ["INVENTARIO"])
-        
-        if ws_inv:
-            log(f"  → Hoja inventario: '{ws_inv.Name}'")
-            procesar_rango_ultra_rapido(ws_inv, 1, 3, "A")
-        else:
-            log("  ⚠️ No se encontró 'INVENTARIO'")
-
-        log("\n  ✅ Conversión finalizada (modo ultra-rápido con pandas)")
-
     except Exception as e:
         log(f"  ❌ Error: {e}")
         log(traceback.format_exc())
@@ -4050,17 +4039,17 @@ def main():
                         tmp = save_bytesio_to_temp(bio, Path(matriz_path).stem)
                         matriz_tmp_path = str(tmp)
                         
-                        # CAMBIO CRÍTICO: Abrir con UpdateLinks=3 para desactivar vínculos
+                        # Abrir con UpdateLinks=3 para desactivar vínculos
                         matriz_wb = excel.Workbooks.Open(
                             str(tmp),
-                            UpdateLinks=3,  # ← CAMBIO CLAVE: 3 = No actualizar vínculos externos
+                            UpdateLinks=3,
                             ReadOnly=True,
                             IgnoreReadOnlyRecommended=True,
                             Password=pw,
                             Notify=False
                         )
                         ok = True
-                        log("   [OK] MATRIZ USD abierto (desencriptado) sin actualizar vínculos")
+                        log("   ✓ MATRIZ USD abierto (desencriptado) sin actualizar vínculos")
                         break
                     except Exception as e:
                         continue
@@ -4071,12 +4060,12 @@ def main():
                 # Abrir directamente si no está encriptado
                 matriz_wb = excel.Workbooks.Open(
                     str(matriz_path),
-                    UpdateLinks=3,  # ← CAMBIO CLAVE: 3 = No actualizar vínculos externos
+                    UpdateLinks=3,
                     ReadOnly=True,
                     IgnoreReadOnlyRecommended=True,
                     Notify=False
                 )
-                log("   [OK] MATRIZ USD abierto sin actualizar vínculos")
+                log("   ✓ MATRIZ USD abierto sin actualizar vínculos")
             
             log("")
             
@@ -4087,11 +4076,35 @@ def main():
             log("  → Puede solicitar contraseña manualmente")
             log("")
 
+        # ✅ CRÍTICO: Configurar Excel para NO actualizar vínculos durante la copia
+        log("Configurando Excel para no actualizar vínculos externos...")
+        original_ask_update = None
+        original_display_alerts = None
+
+        try:
+            # Guardar configuración original
+            original_ask_update = excel.AskToUpdateLinks
+            original_display_alerts = excel.DisplayAlerts
+            
+            # Configurar para NO actualizar vínculos ni mostrar alertas
+            excel.AskToUpdateLinks = False
+            excel.DisplayAlerts = False
+            
+            # Configurar workbook también
+            try:
+                wb.UpdateLinks = 0  # xlUpdateLinksNever
+            except:
+                pass
+            
+            log("  ✓ Excel configurado para ignorar vínculos externos")
+            
+        except Exception as e:
+            log(f"  ⚠ Error al configurar Excel: {e}")
 
         # 3) NORMALIZAR nombre de hoja INVENTARIO
         log("Normalizando nombre de hoja INVENTARIO...")
         normalized_inv_name = normalize_sheet_name(wb, SHEET_INV_ORIG)
-        
+
         try:
             ws_inv_orig = wb.Worksheets(normalized_inv_name)
         except Exception:
@@ -4100,7 +4113,7 @@ def main():
 
         # 4) ELIMINAR hoja INVENTARIO COPIA si existe
         try:
-            excel.DisplayAlerts = True
+            excel.DisplayAlerts = False  # Ya configurado arriba
             for i in range(1, wb.Worksheets.Count + 1):
                 try:
                     sheet_name = wb.Worksheets(i).Name
@@ -4127,44 +4140,69 @@ def main():
             ws_inv_copia = wb.Worksheets.Add(After=ws_inv_orig)
             ws_inv_copia.Name = SHEET_INV_COPIA
             
-            # ✅ CORRECCIÓN CRÍTICA: Copiar en DOS pasos para evitar diálogo de contraseña
-            # Paso 1: Copiar FORMATO (sin valores ni fórmulas)
-            log("  Copiando formato de la hoja original...")
+            log("  Copiando contenido...")
+            # ✅ Ahora NO debería pedir contraseña
+            ws_inv_orig.UsedRange.Copy(Destination=ws_inv_copia.Range("A1"))
+            
             try:
-                # Copiar anchos de columna primero
                 for col in range(1, ws_inv_orig.UsedRange.Columns.Count + 1):
                     ws_inv_copia.Columns(col).ColumnWidth = ws_inv_orig.Columns(col).ColumnWidth
-                
-                # Copiar formato de celdas (sin contenido)
-                ws_inv_orig.UsedRange.Copy()
-                ws_inv_copia.Range("A1").PasteSpecial(Paste=-4122)  # xlPasteFormats
-                excel.CutCopyMode = False
-                
-                log("  ✓ Formato copiado")
             except Exception as e:
-                log(f"  ⚠ Advertencia al copiar formato: {e}")
-            
-            # Paso 2: Copiar VALORES (convierte fórmulas a valores, evita vínculos externos)
-            log("  Copiando valores (sin fórmulas ni vínculos externos)...")
-            try:
-                ws_inv_orig.UsedRange.Copy()
-                ws_inv_copia.Range("A1").PasteSpecial(Paste=-4163)  # xlPasteValues
-                excel.CutCopyMode = False
-                
-                log("  ✓ Valores copiados (fórmulas convertidas a valores)")
-            except Exception as e:
-                log(f"  ❌ Error al copiar valores: {e}")
-                # Fallback: copiar todo (puede pedir contraseña)
-                log("  ⚠ Usando método de copia completa (puede requerir contraseñas)...")
-                ws_inv_orig.UsedRange.Copy(Destination=ws_inv_copia.Range("A1"))
+                log(f"  ⚠ Advertencia al copiar anchos: {e}")
             
             log(f"✅ Hoja '{SHEET_INV_COPIA}' creada exitosamente")
             
-            # ✅ YA NO ES NECESARIO ROMPER VÍNCULOS (ya están rotos al copiar como valores)
-            log("  ℹ Vínculos externos ya eliminados (copiado como valores)")
+            # ROMPER VÍNCULOS EXTERNOS
+            log("Rompiendo vínculos externos en INVENTARIO COPIA...")
+            try:
+                temp_hr, temp_hdr, temp_hdrn = ws_headers_smart(
+                    ws_inv_copia,
+                    expected_row=HEADER_ROW_INV,
+                    preferred_labels=["REFERENCIA", "NOMBRE LISTA", "NOMBRE MYR"]
+                )
+                
+                columnas_a_romper = [
+                    "NOMBRE LISTA",
+                    "NOMBRE MYR",
+                    "REFERENCIA LISTA DE PRECIOS",
+                    "PRECIO LISTA"
+                ]
+                
+                columnas_rotas = 0
+                for col_name in columnas_a_romper:
+                    col_idx = temp_hdrn.get(_norm(col_name))
+                    if col_idx:
+                        try:
+                            used_range = ws_inv_copia.UsedRange
+                            last_row_temp = used_range.Rows.Count
+                            
+                            col_range = ws_inv_copia.Range(
+                                ws_inv_copia.Cells(temp_hr + 1, col_idx),
+                                ws_inv_copia.Cells(last_row_temp, col_idx)
+                            )
+                            
+                            col_range.Copy()
+                            col_range.PasteSpecial(Paste=-4163)  # xlPasteValues
+                            excel.CutCopyMode = False
+                            
+                            columnas_rotas += 1
+                            log(f"   ✓ Vínculos rotos en columna: {col_name}")
+                            
+                        except Exception as e:
+                            log(f"  ⚠ No se pudo romper vínculos en {col_name}: {e}")
+                
+                if columnas_rotas > 0:
+                    log(f"✅ {columnas_rotas} columna(s) convertida(s) a valores")
+                else:
+                    log("  ℹ No se encontraron columnas con vínculos externos")
+                    
+            except Exception as e:
+                log(f"  ⚠ Error al romper vínculos externos: {e}")
             
         except Exception as e:
             log(f"❌ ERROR al crear copia: {e}")
+            import traceback
+            log(traceback.format_exc())
             raise RuntimeError(f"No se pudo crear copia de la hoja INVENTARIO: {e}")
 
         if was_protected:
@@ -4173,6 +4211,16 @@ def main():
                 log("Hoja INVENTARIO original re-protegida")
             except Exception as e:
                 log(f"Aviso al re-proteger: {e}")
+
+        # ✅ RESTAURAR configuración de Excel
+        try:
+            if original_ask_update is not None:
+                excel.AskToUpdateLinks = original_ask_update
+            if original_display_alerts is not None:
+                excel.DisplayAlerts = original_display_alerts
+            log("Configuración de Excel restaurada")
+        except:
+            pass
 
         # 6) TRABAJAR EN INVENTARIO COPIA
         log("Trabajando en hoja INVENTARIO COPIA...")
@@ -5212,8 +5260,193 @@ def main():
         except Exception as e:
             log(f"  ❌ ERROR al llenar REFERENCIA LISTA DE PRECIOS: {e}")
             import traceback
-            log(traceback.format_exc())   
+            log(traceback.format_exc())  
+            
+        # 15.5) Intercambiar columnas A y B en INV LISTA PRECIOS
+        log("Intercambiando columnas A ↔ B en INV LISTA PRECIOS...")
+        try:
+            # Buscar la hoja INV LISTA PRECIOS
+            ws_lp = None
+            target_norm = _norm(SHEET_INV_LISTA)
+            
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name = wb.Worksheets(i).Name
+                if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                    ws_lp = wb.Worksheets(i)
+                    break
+            
+            if ws_lp is None:
+                for i in range(1, wb.Worksheets.Count + 1):
+                    sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                    if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                        ws_lp = wb.Worksheets(i)
+                        break
+            
+            if ws_lp:
+                log(f"  Procesando hoja: '{ws_lp.Name}'")
+                
+                # ✅ MÉTODO 1: Usar columna temporal (más seguro)
+                # Insertar columna temporal en C
+                ws_lp.Columns(3).Insert()
+                log("  ✓ Columna temporal insertada en C")
+                
+                # Copiar columna A → C (temporal)
+                ws_lp.Columns(1).Copy()
+                ws_lp.Columns(3).PasteSpecial(Paste=-4163)  # xlPasteValues
+                ws_lp.Columns(3).PasteSpecial(Paste=-4122)  # xlPasteFormats
+                excel.CutCopyMode = False
+                log("  ✓ Columna A copiada a temporal (C)")
+                
+                # Copiar columna B → A
+                ws_lp.Columns(2).Copy()
+                ws_lp.Columns(1).PasteSpecial(Paste=-4163)  # xlPasteValues
+                ws_lp.Columns(1).PasteSpecial(Paste=-4122)  # xlPasteFormats
+                excel.CutCopyMode = False
+                log("  ✓ Columna B movida a A")
+                
+                # Copiar columna C (temporal) → B
+                ws_lp.Columns(3).Copy()
+                ws_lp.Columns(2).PasteSpecial(Paste=-4163)  # xlPasteValues
+                ws_lp.Columns(2).PasteSpecial(Paste=-4122)  # xlPasteFormats
+                excel.CutCopyMode = False
+                log("  ✓ Columna A (desde temporal) movida a B")
+                
+                # Eliminar columna temporal (C)
+                ws_lp.Columns(3).Delete()
+                log("  ✓ Columna temporal eliminada")
+                
+                # Ajustar anchos de columna
+                try:
+                    ws_lp.Columns(1).ColumnWidth = 20  # REFERENCIA LISTA DE PRECIOS
+                    ws_lp.Columns(2).ColumnWidth = 20  # REFERENCIA FERTRAC
+                except Exception as e:
+                    log(f"  ⚠ No se pudieron ajustar anchos: {e}")
+                
+                log("✅ Columnas A y B intercambiadas exitosamente")
+                log("   Nueva disposición:")
+                log("   - Columna A: REFERENCIA LISTA DE PRECIOS")
+                log("   - Columna B: REFERENCIA FERTRAC")
+                
+            else:
+                log("  ⚠ No se encontró la hoja INV LISTA PRECIOS para intercambiar columnas")
+                
+        except Exception as e:
+            log(f"  ❌ ERROR al intercambiar columnas: {e}")
+            import traceback
+            log(traceback.format_exc())
         
+
+        # 15.6) Llenar LINEA en INV LISTA PRECIOS desde INVENTARIO COPIA
+        log("Llenando LINEA en INV LISTA PRECIOS desde INVENTARIO COPIA...")
+        try:
+            # Buscar la hoja INV LISTA PRECIOS
+            ws_lp = None
+            target_norm = _norm(SHEET_INV_LISTA)
+            
+            for i in range(1, wb.Worksheets.Count + 1):
+                sheet_name = wb.Worksheets(i).Name
+                if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
+                    ws_lp = wb.Worksheets(i)
+                    break
+            
+            if ws_lp is None:
+                for i in range(1, wb.Worksheets.Count + 1):
+                    sheet_name_norm = _norm(wb.Worksheets(i).Name)
+                    if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
+                        ws_lp = wb.Worksheets(i)
+                        break
+            
+            if ws_lp:
+                log(f"  Hoja encontrada: '{ws_lp.Name}'")
+                
+                # Obtener encabezados de INV LISTA PRECIOS
+                hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(
+                    ws_lp, 
+                    HEADER_ROW_INV_LISTA, 
+                    ["REFERENCIA FERTRAC", "LINEA"]
+                )
+                
+                # Buscar columna REFERENCIA FERTRAC en INV LISTA PRECIOS
+                ref_fertrac_idx_lp = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
+                
+                # Buscar columna LINEA en INV LISTA PRECIOS
+                linea_idx_lp = hdrn_lp.get(_norm("LINEA"))
+                
+                if not ref_fertrac_idx_lp:
+                    log("  ⚠ Columna REFERENCIA FERTRAC no encontrada en INV LISTA PRECIOS")
+                elif not linea_idx_lp:
+                    log("  ⚠ Columna LINEA no encontrada en INV LISTA PRECIOS")
+                    log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
+                else:
+                    log(f"  ✓ Columnas encontradas:")
+                    log(f"    - REFERENCIA FERTRAC: índice {ref_fertrac_idx_lp}")
+                    log(f"    - LINEA: índice {linea_idx_lp}")
+                    
+                    # Buscar columna LINEA COPIA en INVENTARIO COPIA (columna J)
+                    linea_copia_idx = hdrn_copia.get(_norm("LINEA COPIA"))
+                    
+                    if not linea_copia_idx:
+                        log("  ⚠ Columna LINEA COPIA no encontrada en INVENTARIO COPIA")
+                    else:
+                        log(f"  ✓ Columna LINEA COPIA encontrada en INVENTARIO COPIA: índice {linea_copia_idx}")
+                        
+                        # Determinar última fila con datos en INV LISTA PRECIOS
+                        last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx_lp, hr_lp)
+                        pivot_top_lp = ws_first_pivot_row(ws_lp)
+                        if pivot_top_lp and pivot_top_lp > hr_lp:
+                            last_row_lp = min(last_row_lp, pivot_top_lp - 1)
+                        
+                        log(f"  📋 Procesando {last_row_lp - hr_lp} filas...")
+                        
+                        # Leer REFERENCIA de INVENTARIO COPIA (columna A)
+                        refs_inv_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
+                        refs_inv_copia_norm = [to_num_str(r) for r in refs_inv_copia]
+                        
+                        # Leer LINEA COPIA de INVENTARIO COPIA (columna J)
+                        lineas_inv_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, linea_copia_idx)
+                        
+                        # Crear diccionario REFERENCIA -> LINEA COPIA
+                        linea_map = dict(zip(refs_inv_copia_norm, lineas_inv_copia))
+                        
+                        log(f"  ✓ Diccionario creado: {len(linea_map)} referencias con LINEA")
+                        
+                        # Leer REFERENCIA FERTRAC de INV LISTA PRECIOS
+                        refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx_lp)
+                        refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
+                        
+                        # Cruzar y llenar LINEA
+                        lineas_lp = []
+                        matched = 0
+                        
+                        for ref_fertrac in refs_fertrac_lp_norm:
+                            if ref_fertrac and ref_fertrac in linea_map:
+                                linea_val = linea_map[ref_fertrac]
+                                
+                                # Limpiar valor (eliminar None, nan, etc.)
+                                if linea_val and str(linea_val).strip() not in ("", "None", "nan", "NaN"):
+                                    lineas_lp.append(str(linea_val).strip())
+                                    matched += 1
+                                else:
+                                    lineas_lp.append("")
+                            else:
+                                lineas_lp.append("")
+                        
+                        # Escribir LINEA en INV LISTA PRECIOS
+                        write_range_as_array(ws_lp, hr_lp + 1, linea_idx_lp, lineas_lp)
+                        
+                        log(f"✅ LINEA actualizada en INV LISTA PRECIOS:")
+                        log(f"   - Total procesado: {len(lineas_lp)}")
+                        log(f"   - Coincidencias encontradas: {matched}")
+                        log(f"   - Sin coincidencia (vacío): {len(lineas_lp) - matched}")
+                        
+            else:
+                log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
+                
+        except Exception as e:
+            log(f"  ❌ ERROR al llenar LINEA en INV LISTA PRECIOS: {e}")
+            import traceback
+            log(traceback.format_exc())
+                    
         # 16) Llenar EXISTENCIA (con fecha) en INV LISTA PRECIOS desde INVENTARIO COPIA
         log("Llenando EXISTENCIA (con fecha) en INV LISTA PRECIOS...")
         try:
