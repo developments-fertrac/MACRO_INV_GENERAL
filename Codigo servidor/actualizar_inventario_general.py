@@ -28,14 +28,14 @@ except Exception as e:
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==== CONFIG ====
-BASE_PATH = Path(__file__).resolve().parent  
-# BASE_PATH = Path(r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026")
+# BASE_PATH = Path(__file__).resolve().parent  
+BASE_PATH = Path(r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026")
 # BASE_PATH = Path(r"C:\MACRO_INVENTARIO_GENERAL")
-# VALORIZADOS_EXTRA_PATH = BASE_PATH / "Pruebas Inv General" / "Valorizados"
-# OUTPUT_PATH = BASE_PATH / "Pruebas Inv General"  # ✅ Nueva ruta de salida
+VALORIZADOS_EXTRA_PATH = BASE_PATH / "Pruebas Inv General" / "Valorizados"
+OUTPUT_PATH = BASE_PATH / "Pruebas Inv General"  # ✅ Nueva ruta de salida
 
 # Lista de directorios donde buscar valorizados (orden de prioridad)
-# VALORIZADO_SEARCH_PATHS = [BASE_PATH, VALORIZADOS_EXTRA_PATH]
+VALORIZADO_SEARCH_PATHS = [BASE_PATH, VALORIZADOS_EXTRA_PATH]
 
 
 PASS_INV = "Compras2027"
@@ -52,7 +52,7 @@ PFX_VAL_FALT         = "VALORIZADO FALTANTES"
 PFX_VAL_TOBERIN      = "VALORIZADO TOBERIN"
 PFX_MARCAS           = "MARCAS"
 PFX_DISTRIBUCION     = "DISTRIBUCION DE MATRICES"
-PFX_CONSOLIDADO_REMISIONES = "CONSOLIDADO REMISIONES 2019-2026"  
+PFX_MAYOR_EXISTENCIA = "2026 INVENTARIO MYR EXISTENCIA"
 PFX_MATRIZ_USD = "2026 MATRIZ USD"
 
 def buscar_hoja_por_patron(workbook, patron, ignorar_dolares=True):
@@ -120,7 +120,7 @@ EMAIL_CONFIG = {
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,  # Usado solo en método 2 (fallback)
     "sender_email": "analista_automatizacion@fertrac.com",
-    "sender_password": "lsda jbbr bnsw nlbe",  # ← Contraseña de aplicación de Google
+    "sender_password": "lbih abom caxy pzbh",  # ← Contraseña de aplicación de Google
     "recipient_emails": [
         "analista_automatizacion@fertrac.com",
         "data_science@fertrac.com",
@@ -129,251 +129,9 @@ EMAIL_CONFIG = {
    
         
     ],
-    "enabled": False  # Cambiar a False para desactivar correos
+    "enabled": True  # Cambiar a False para desactivar correos
 }
 
-
-# =================== SISTEMA DE TRACKING DE ELIMINACIONES ===================
-
-class EliminacionTracker:
-    """
-    Rastrea todas las eliminaciones de referencias durante el proceso
-    y genera un reporte Excel consolidado al final.
-    """
-    
-    def __init__(self):
-        self.eliminaciones = []
-        self.stats_por_paso = {}
-    
-    def registrar(self, paso: str, fila_excel: int, referencia: str, 
-                  nombre: str = "", marca: str = "", linea: str = "", 
-                  motivo: str = "", datos_extra: dict = None):
-        """
-        Registra una eliminación.
-        
-        Args:
-            paso: Nombre del paso/fase donde se eliminó
-            fila_excel: Número de fila en Excel (antes de eliminar)
-            referencia: Referencia que se eliminó
-            nombre: NOMBRE MYR o NOMBRE ODOO
-            marca: MARCA
-            linea: LINEA
-            motivo: Razón específica de eliminación
-            datos_extra: Diccionario con datos adicionales
-        """
-        registro = {
-            'TIMESTAMP': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'PASO': paso,
-            'FILA_EXCEL': fila_excel,
-            'REFERENCIA': referencia,
-            'NOMBRE': nombre,
-            'MARCA': marca,
-            'LINEA': linea,
-            'MOTIVO': motivo
-        }
-        
-        # Agregar datos extra si existen
-        if datos_extra:
-            registro.update(datos_extra)
-        
-        self.eliminaciones.append(registro)
-        
-        # Actualizar estadísticas por paso
-        if paso not in self.stats_por_paso:
-            self.stats_por_paso[paso] = 0
-        self.stats_por_paso[paso] += 1
-    
-    def log_eliminacion(self, paso: str, fila_excel: int, referencia: str, 
-                        motivo: str = "", mostrar_en_consola: bool = True):
-        """
-        Registra y muestra en consola una eliminación (versión simplificada).
-        """
-        if mostrar_en_consola:
-            log(f"    🗑️  Fila {fila_excel}: {referencia} → {motivo}")
-        
-        self.registrar(paso, fila_excel, referencia, motivo=motivo)
-    
-    def mostrar_resumen(self):
-        """Muestra un resumen de eliminaciones en consola."""
-        log("")
-        log("="*70)
-        log("📊 RESUMEN DE ELIMINACIONES")
-        log("="*70)
-        
-        if not self.eliminaciones:
-            log("✅ No se eliminaron referencias durante el proceso")
-            return
-        
-        log(f"Total de referencias eliminadas: {len(self.eliminaciones)}")
-        log("")
-        log("Desglose por paso:")
-        
-        for paso, cantidad in sorted(self.stats_por_paso.items(), 
-                                     key=lambda x: x[1], reverse=True):
-            log(f"  • {paso}: {cantidad} referencias")
-        
-        log("="*70)
-        log("")
-    
-    def generar_reporte_excel(self, base_path: Path) -> Path:
-        """
-        Genera un reporte Excel con todas las eliminaciones.
-        
-        Returns:
-            Path del archivo generado
-        """
-        if not self.eliminaciones:
-            log("ℹ️  No hay eliminaciones para reportar")
-            return None
-        
-        try:
-            log("")
-            log("📄 Generando reporte de eliminaciones...")
-            
-            # Crear DataFrame principal
-            df_todas = pd.DataFrame(self.eliminaciones)
-            
-            # Generar nombre del archivo
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            nombre_reporte = f"REPORTE_ELIMINACIONES_{timestamp}.xlsx"
-            ruta_reporte = base_path / nombre_reporte
-            
-            # Crear archivo Excel con múltiples hojas
-            with pd.ExcelWriter(ruta_reporte, engine='openpyxl') as writer:
-                # HOJA 1: Todas las eliminaciones
-                df_todas_ordenado = df_todas.sort_values(
-                    ['PASO', 'FILA_EXCEL'], 
-                    ascending=[True, True]
-                )
-                df_todas_ordenado.to_excel(
-                    writer, 
-                    sheet_name='TODAS LAS ELIMINACIONES', 
-                    index=False
-                )
-                
-                # HOJA 2: Resumen por paso
-                resumen_data = []
-                for paso, cantidad in self.stats_por_paso.items():
-                    # Obtener ejemplos de este paso
-                    ejemplos = df_todas[df_todas['PASO'] == paso]['REFERENCIA'].head(5).tolist()
-                    ejemplos_str = ', '.join(str(e) for e in ejemplos)
-                    if len(df_todas[df_todas['PASO'] == paso]) > 5:
-                        ejemplos_str += f" ... (+{len(df_todas[df_todas['PASO'] == paso]) - 5} más)"
-                    
-                    resumen_data.append({
-                        'PASO': paso,
-                        'TOTAL ELIMINADAS': cantidad,
-                        'PORCENTAJE': f"{(cantidad / len(self.eliminaciones) * 100):.1f}%",
-                        'EJEMPLOS': ejemplos_str
-                    })
-                
-                df_resumen = pd.DataFrame(resumen_data).sort_values(
-                    'TOTAL ELIMINADAS', 
-                    ascending=False
-                )
-                df_resumen.to_excel(writer, sheet_name='RESUMEN POR PASO', index=False)
-                
-                # HOJAS 3+: Una hoja por cada paso
-                for paso in sorted(self.stats_por_paso.keys()):
-                    df_paso = df_todas[df_todas['PASO'] == paso].copy()
-                    
-                    # Limpiar nombre de hoja (máximo 31 caracteres, sin caracteres especiales)
-                    nombre_hoja = paso.replace(':', '').replace('/', '-')[:31]
-                    
-                    df_paso.to_excel(writer, sheet_name=nombre_hoja, index=False)
-            
-            # Formatear el Excel
-            try:
-                from openpyxl import load_workbook
-                from openpyxl.styles import Font, PatternFill, Alignment
-                
-                wb = load_workbook(ruta_reporte)
-                
-                for sheet_name in wb.sheetnames:
-                    ws = wb[sheet_name]
-                    
-                    # Ajustar anchos de columna
-                    for column in ws.columns:
-                        max_length = 0
-                        column_letter = column[0].column_letter
-                        
-                        for cell in column:
-                            try:
-                                if len(str(cell.value)) > max_length:
-                                    max_length = len(str(cell.value))
-                            except:
-                                pass
-                        
-                        adjusted_width = min(max_length + 2, 50)
-                        ws.column_dimensions[column_letter].width = adjusted_width
-                    
-                    # Formatear encabezados
-                    if ws.max_row > 0:
-                        for cell in ws[1]:
-                            cell.font = Font(bold=True, color="FFFFFF")
-                            cell.fill = PatternFill(
-                                start_color="366092", 
-                                end_color="366092", 
-                                fill_type="solid"
-                            )
-                            cell.alignment = Alignment(
-                                horizontal="center", 
-                                vertical="center"
-                            )
-                    
-                    # Colorear columna PASO
-                    if sheet_name == 'TODAS LAS ELIMINACIONES':
-                        # Encontrar columna PASO
-                        paso_col = None
-                        for idx, cell in enumerate(ws[1], start=1):
-                            if cell.value == 'PASO':
-                                paso_col = idx
-                                break
-                        
-                        if paso_col:
-                            # Asignar colores por paso
-                            colores_pasos = {}
-                            colores_disponibles = [
-                                "FFF2CC", "E2EFDA", "DEEBF7", "FCE4D6", 
-                                "EDEDED", "F4B084", "C5E0B4", "BDD7EE"
-                            ]
-                            
-                            for row in range(2, ws.max_row + 1):
-                                paso_val = ws.cell(row=row, column=paso_col).value
-                                if paso_val:
-                                    if paso_val not in colores_pasos:
-                                        color_idx = len(colores_pasos) % len(colores_disponibles)
-                                        colores_pasos[paso_val] = colores_disponibles[color_idx]
-                                    
-                                    # Aplicar color a toda la fila
-                                    for col in range(1, ws.max_column + 1):
-                                        ws.cell(row=row, column=col).fill = PatternFill(
-                                            start_color=colores_pasos[paso_val],
-                                            end_color=colores_pasos[paso_val],
-                                            fill_type="solid"
-                                        )
-                
-                wb.save(ruta_reporte)
-                
-            except Exception as e_formato:
-                log(f"  ⚠️ No se pudo aplicar formato avanzado: {e_formato}")
-            
-            log(f"✅ Reporte generado: {nombre_reporte}")
-            log(f"   📁 Ubicación: {ruta_reporte}")
-            log(f"   📊 Total de eliminaciones: {len(self.eliminaciones)}")
-            log(f"   📋 Hojas creadas: {len(self.stats_por_paso) + 2}")
-            
-            return ruta_reporte
-            
-        except Exception as e:
-            log(f"❌ Error al generar reporte de eliminaciones: {e}")
-            import traceback
-            log(traceback.format_exc())
-            return None
-
-
-# Crear instancia global del tracker
-TRACKER_ELIMINACIONES = EliminacionTracker()
 
 # ==== DEPENDENCIAS (COM) ====
 try:
@@ -486,60 +244,238 @@ def _strip_dol_tmp(name: str) -> str:
     base = re.sub(r"^\$+", "", base)
     return base
 
-# ========================================================================
-# FUNCIONES AUXILIARES PARA CIERRE ROBUSTO DE COM
-# ========================================================================
-
-def _safe_close_workbook(wb, max_attempts: int = 3, delay: float = 0.5):
-    """Cierra un workbook de Excel con reintentos."""
-    if wb is None:
-        return
+def validar_fecha_archivo_hoy(archivo: Path) -> bool:
+    """
+    Verifica si un archivo fue modificado HOY (mismo día que la ejecución).
     
-    for attempt in range(max_attempts):
-        try:
-            wb.Close(SaveChanges=False)
-            time.sleep(0.1)  # Pequeño delay después de cerrar
-            return  # Éxito
-        except Exception as e:
-            if attempt < max_attempts - 1:
-                time.sleep(delay)
-            else:
-                # Último intento falló, solo logueamos pero no lanzamos excepción
-                log(f"  ⚠️ No se pudo cerrar workbook limpiamente: {e}")
+    Args:
+        archivo: Path del archivo a validar
     
-    # Forzar liberación del objeto
+    Returns:
+        True si el archivo es de hoy, False en caso contrario
+    """
+    from datetime import date
+    
     try:
-        del wb
-    except:
-        pass
+        # Obtener fecha de modificación del archivo
+        timestamp_modificacion = archivo.stat().st_mtime
+        fecha_modificacion = datetime.fromtimestamp(timestamp_modificacion).date()
+        
+        # Obtener fecha actual
+        fecha_hoy = date.today()
+        
+        # Comparar
+        es_hoy = fecha_modificacion == fecha_hoy
+        
+        if es_hoy:
+            log(f"   ✅ Archivo válido (modificado hoy: {fecha_modificacion})")
+        else:
+            log(f"   ⚠️ Archivo desactualizado (modificado: {fecha_modificacion}, hoy: {fecha_hoy})")
+        
+        return es_hoy
+        
+    except Exception as e:
+        log(f"   ❌ Error al validar fecha: {e}")
+        return False
+
+def obtener_ruta_inventario_actualizado(base_path: Path) -> Path:
+    """
+    Construye la ruta dinámica al directorio del mes actual para INVENTARIO GENERAL ACTUALIZADO.
+    
+    Formato: D:\...\INFORMES\INVENTARIO GENERAL ACTUALIZADO\{MES_NUMERO}. {MES_NOMBRE}
+    Ejemplo: D:\...\INFORMES\INVENTARIO GENERAL ACTUALIZADO\12. DICIEMBRE
+    
+    Returns:
+        Path al directorio del mes actual
+    """
+    hoy = date.today()
+    mes_numero = hoy.month
+    
+    # Nombres de meses en español (mayúsculas)
+    meses_es = [
+        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+        "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
+    ]
+    mes_nombre = meses_es[mes_numero - 1]
+    
+    # Construir ruta: {mes_numero}. {mes_nombre}
+    carpeta_mes = f"{mes_numero:02d}. {mes_nombre}"
+    
+    ruta_completa = base_path / "INFORMES" / "INVENTARIO GENERAL ACTUALIZADO" / carpeta_mes
+    
+    return ruta_completa
 
 
-def _safe_quit_excel(excel, max_attempts: int = 3, delay: float = 0.5):
-    """Cierra Excel con reintentos."""
-    if excel is None:
-        return
+def generar_nombre_inventario_dia(fecha: date = None) -> str:
+    """
+    Genera el nombre esperado del archivo INVENTARIO GENERAL ACTUALIZADO para una fecha.
     
-    for attempt in range(max_attempts):
-        try:
-            excel.Quit()
-            time.sleep(0.2)  # Delay para que Excel se cierre completamente
-            return  # Éxito
-        except Exception as e:
-            if attempt < max_attempts - 1:
-                time.sleep(delay)
-            else:
-                # Último intento falló, solo logueamos
-                log(f"  ⚠️ No se pudo cerrar Excel limpiamente: {e}")
+    Formato: INVENTARIO GENERAL ACTUALIZADO {DIA} DE {MES} DE {AÑO}
+    Ejemplo: INVENTARIO GENERAL ACTUALIZADO 17 DE DICIEMBRE DE 2025
     
-    # Forzar liberación del objeto
+    Args:
+        fecha: Fecha para la cual generar el nombre (default: hoy)
+    
+    Returns:
+        String con el nombre base del archivo (sin extensión)
+    """
+    if fecha is None:
+        fecha = date.today()
+    
+    # ✅ FIX: Usar lista hardcoded en lugar de strftime
+    meses_es = [
+        "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+        "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
+    ]
+    
+    dia = fecha.day
+    mes_nombre = meses_es[fecha.month - 1]  # ✅ SIEMPRE en español
+    año = fecha.year
+    
+    nombre = f"INVENTARIO GENERAL ACTUALIZADO {dia:02d} DE {mes_nombre} DE {año}"
+    
+    return nombre
+
+def buscar_inventario_actualizado_hoy(base_path: Path) -> Path:
+    """
+    Busca el archivo INVENTARIO GENERAL ACTUALIZADO del día actual.
+    ACEPTA SUFIJOS como (MAÑANA), (TARDE), etc.
+    """
+    # Obtener ruta del mes actual
+    ruta_mes = obtener_ruta_inventario_actualizado(base_path)
+    
+    log(f"Buscando inventario actualizado en: {ruta_mes}")
+    
+    # ✅ DEBUG: Verificar que la ruta existe
+    log(f"¿Ruta existe? {ruta_mes.exists()}")
+    log(f"¿Es directorio? {ruta_mes.is_dir()}")
+    
+    # Verificar que la carpeta exista
+    if not ruta_mes.exists():
+        raise FileNotFoundError(
+            f"No existe la carpeta del mes actual:\n"
+            f"  {ruta_mes}\n"
+            f"Por favor, verifica que la estructura de carpetas sea correcta."
+        )
+    
+    # Generar nombre base esperado (sin sufijos)
+    nombre_base = generar_nombre_inventario_dia()
+    
+    log(f"Patrón de búsqueda generado: '{nombre_base}'")
+    log(f"Patrón normalizado: '{_norm(nombre_base)}'")
+    log(f"Buscando archivo: {nombre_base}.xlsx/.xlsm (permite sufijos como '(MAÑANA)')")
+    
+    # ✅ FIX: Buscar AMBAS extensiones (.xlsx Y .xlsm)
+    archivos_encontrados = []
+    
+    # ✅ NUEVO: Listar TODOS los archivos primero para debug
+    log(f"")
+    log(f"Listando TODOS los archivos en la carpeta:")
     try:
-        del excel
-    except:
-        pass
+        todos_archivos = list(ruta_mes.iterdir())
+        log(f"Total de archivos/carpetas: {len(todos_archivos)}")
+        
+        archivos_excel = [f for f in todos_archivos if f.is_file() and f.suffix.lower() in ['.xlsx', '.xlsm', '.xls']]
+        log(f"Archivos Excel encontrados: {len(archivos_excel)}")
+        
+        if len(archivos_excel) == 0:
+            log(f"⚠️ NO se encontraron archivos Excel en la carpeta")
+            log(f"Contenido de la carpeta:")
+            for item in todos_archivos[:20]:
+                log(f"   • {item.name} (tipo: {'DIR' if item.is_dir() else 'FILE'}, ext: {item.suffix if item.is_file() else 'N/A'})")
+        else:
+            log(f"Archivos Excel en la carpeta:")
+            for arch in archivos_excel[:10]:
+                nombre_limpio = _strip_dol_tmp(arch.stem)
+                log(f"   • {arch.name}")
+                log(f"     - Limpio: '{nombre_limpio}'")
+                log(f"     - Normalizado: '{_norm(nombre_limpio)}'")
+        
+    except Exception as e:
+        log(f"❌ Error al listar archivos: {e}")
+        import traceback
+        log(traceback.format_exc())
     
-    # Garbage collection para liberar COM
-    import gc
-    gc.collect()
+    # ✅ BÚSQUEDA FLEXIBLE con AMBAS extensiones
+    for extension in ['.xlsx', '.xlsm', '.xls']:
+        for archivo in ruta_mes.glob(f"*{extension}"):
+            if not archivo.is_file():
+                continue
+            
+            # Remover $ del inicio y extensión
+            nombre_limpio = _strip_dol_tmp(archivo.stem)
+            
+            # Verificar si CONTIENE el patrón base
+            nombre_norm = _norm(nombre_limpio)
+            patron_norm = _norm(nombre_base)
+            
+            # Log de comparación para archivos que empiecen similar
+            if nombre_norm.startswith("inventario general actualizado 17"):
+                log(f"")
+                log(f"   ⚙️ Comparando:")
+                log(f"      Archivo: '{nombre_norm}'")
+                log(f"      Patrón:  '{patron_norm}'")
+                log(f"      ¿Coincide? {nombre_norm.startswith(patron_norm)}")
+            
+            # Verificar si el archivo empieza con el patrón esperado
+            if nombre_norm.startswith(patron_norm):
+                archivos_encontrados.append(archivo)
+                
+                # Determinar sufijo si lo tiene
+                sufijo = nombre_limpio[len(nombre_base):].strip()
+                if sufijo:
+                    log(f"   ✅ Archivo encontrado: {archivo.name} (sufijo: '{sufijo}')")
+                else:
+                    log(f"   ✅ Archivo encontrado: {archivo.name}")
+    
+    # Si no se encuentra archivo del día
+    if len(archivos_encontrados) == 0:
+        # Listar archivos disponibles
+        archivos_disponibles = []
+        for ext in ['.xlsx', '.xlsm', '.xls']:
+            archivos_disponibles.extend(list(ruta_mes.glob(f"*{ext}")))
+        
+        archivos_str = "\n".join([f"     - {f.name}" for f in archivos_disponibles[:15]])
+        
+        if len(archivos_disponibles) > 15:
+            archivos_str += f"\n     ... y {len(archivos_disponibles) - 15} archivos más"
+        
+        if len(archivos_disponibles) == 0:
+            archivos_str = "     [NINGÚN ARCHIVO EXCEL ENCONTRADO]"
+        
+        raise FileNotFoundError(
+            f"❌ ERROR CRÍTICO: No se encontró el archivo INVENTARIO GENERAL ACTUALIZADO de HOY.\n\n"
+            f"  📅 Fecha esperada: {date.today().day:02d} de {meses_es[date.today().month - 1]} de {date.today().year}\n"
+            f"  📁 Ubicación: {ruta_mes}\n"
+            f"  📝 Patrón buscado: {nombre_base}*.xlsx/.xlsm\n\n"
+            f"  💡 Archivos disponibles en la carpeta:\n{archivos_str}\n\n"
+            f"  ⚠️ Por favor, genera el inventario actualizado desde el ERP para el día de hoy."
+        )
+    
+    # Si hay múltiples archivos del mismo día
+    if len(archivos_encontrados) > 1:
+        log(f"")
+        log(f"  ⚠️ Se encontraron {len(archivos_encontrados)} archivos del día:")
+        for idx, arch in enumerate(archivos_encontrados, 1):
+            log(f"     {idx}. {arch.name}")
+        
+        # Tomar el más reciente
+        archivos_encontrados.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        log(f"  → Usando el más reciente: {archivos_encontrados[0].name}")
+    
+    archivo_final = archivos_encontrados[0]
+    
+    # Validar fecha
+    if not validar_fecha_archivo_hoy(archivo_final):
+        raise FileNotFoundError(
+            f"❌ ERROR CRÍTICO: El archivo encontrado NO fue modificado HOY.\n\n"
+            f"  📄 Archivo: {archivo_final.name}\n"
+            f"  📅 Modificado: {datetime.fromtimestamp(archivo_final.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"  📅 Hoy: {date.today()}\n\n"
+            f"  ⚠️ Por favor, genera un inventario actualizado NUEVO desde el ERP."
+        )
+    
+    return archivo_final
 
 # ========================================================================
 # 1. VERIFICAR SI ARCHIVO ESTÁ DISPONIBLE
@@ -774,6 +710,45 @@ def find_by_prefix(basedir: Path, prefix: str, exts=[".xlsx", ".xlsm", ".xls", "
     
     return cands[0]
 
+def find_by_prefix_multi(prefix: str, search_paths: list, validar_fecha_hoy: bool = False) -> Path:
+    """
+    Busca archivo por prefijo en múltiples directorios.
+    Retorna el primero encontrado según orden de prioridad.
+    
+    Args:
+        prefix: Prefijo del archivo a buscar
+        search_paths: Lista de directorios donde buscar
+        validar_fecha_hoy: Si True, solo acepta archivos modificados hoy
+    
+    Returns:
+        Path del archivo encontrado
+    """
+    for search_dir in search_paths:
+        if not search_dir.exists():
+            log(f"  ------ Ruta no existe: {search_dir}")
+            continue
+            
+        try:
+            archivo = find_by_prefix(search_dir, prefix)
+            log(f"   [OK] Encontrado en: {search_dir.name}")
+            
+            # ✅ NUEVA VALIDACIÓN: Verificar fecha si se solicita
+            if validar_fecha_hoy:
+                if not validar_fecha_archivo_hoy(archivo):
+                    log(f"   ⚠️ Archivo rechazado por fecha desactualizada: {archivo.name}")
+                    continue  # Buscar en siguiente directorio
+            
+            return archivo
+            
+        except FileNotFoundError:
+            continue
+    
+    # Si llegamos aquí, no se encontró ningún archivo válido
+    mensaje_error = f"No se encontró archivo con prefijo '{prefix}'"
+    if validar_fecha_hoy:
+        mensaje_error += " (modificado HOY)"
+    mensaje_error += " en:\n" + "\n".join([f"  - {p}" for p in search_paths])
+    
     raise FileNotFoundError(mensaje_error)
 
 def decrypt_to_stream(xlsx_path: Path, password: str) -> io.BytesIO:
@@ -804,7 +779,7 @@ def com_convert_to_xlsx(path: Path, passwords: list[str] | None = None) -> Path:
     passwords = passwords or []
     excel = win32.DispatchEx("Excel.Application")
     excel.Visible = False
-    excel.DisplayAlerts = True
+    excel.DisplayAlerts = False
     excel.Interactive = False
     excel.EnableEvents = False
     excel.ScreenUpdating = False
@@ -901,117 +876,64 @@ def read_excel_header_at(path: Path, sheet: str | int, header_row_visible: int) 
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
-
 # ==== LECTURA DE INSUMOS ====
 def cargar_inventario_actualizado(base_dir: Path) -> pd.DataFrame:
-    """ERP preferido; si no hay, cae en PLANTILLA."""
-    try:
-        p = find_by_prefix(base_dir, PFX_INV_ACTUALIZADO)
-        log(f"Abriendo inventario actualizado (ERP): {p.name}")
-        
-        # 🔹 AÑADIDO: Manejo de contraseñas
-        src = open_as_excel_source(p, PASSWORDS_TRY)
-        df = read_excel_header_at(src, sheet="Sheet 1", header_row_visible=1)
-        
-        idx = {_norm(c): c for c in df.columns}
-
-        ref_col = (
-            idx.get("referencia") or idx.get("referencia interna") or idx.get("ref")
-            or idx.get("codigo") or idx.get("código")
-            or next((real for kn, real in idx.items() if "referenc" in kn or "codigo" in kn or kn.endswith("ref")), None)
-        )
-        if not ref_col:
-            raise KeyError(f"{p.name}: no encuentro columna de Referencia. Encabezados: {list(df.columns)}")
-
-        df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
-        
-        
-        # Buscar específicamente las problemáticas
-        refs_problematicas = df[df[ref_col].astype(str).str.contains(r'95\.?276|500\.?845', regex=True, na=False)]
-        if len(refs_problematicas) > 0:
-            for idx_row, row in refs_problematicas.iterrows():
-                val_original = row[ref_col]
-        
-        # 🔹 NORMALIZACIÓN CRÍTICA: Aplicar to_num_str a cada valor
-        df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)    
-       
-
-        nom_col     = idx.get("nombre") or "Nombre"
-        marca_col   = next((real for kn, real in idx.items()
-                            if ("marca/ nombre a mostrar" in kn) or ("marca nombre a mostrar" in kn) or (kn == "marca")), None) \
-                      or next((real for kn, real in idx.items() if "marca" in kn and "mostrar" in kn), None)
-        linea_col   = next((real for kn, real in idx.items()
-                            if ("linea/ nombre a mostrar" in kn) or ("línea/ nombre a mostrar" in kn)), None) \
-                      or next((real for kn, real in idx.items() if "linea" in kn and "mostrar" in kn), None)
-        sublinea_col = next((real for kn, real in idx.items() if "sub" in kn and "linea" in kn and "mostrar" in kn), None)
-        costo_col   = idx.get("costo") or "Costo"
-
-        rename = {}
-        if nom_col      in df.columns: rename[nom_col]      = "__NOMBRE__"
-        if marca_col    in df.columns: rename[marca_col]    = "__MARCA_SYS__"
-        if linea_col    in df.columns: rename[linea_col]    = "__LINEA_SYS__"
-        if sublinea_col in df.columns: rename[sublinea_col] = "__SUBLINEA_SYS__"
-        if costo_col    in df.columns: rename[costo_col]    = "__COSTO__"
-        
-        df_final = df.rename(columns=rename)
-        
-
-        return df_final
-        
-    except FileNotFoundError:
-        pass
-
-    # 🔹 Usar búsqueda dinámica (ignora $ al inicio)
-    p = buscar_archivo_por_patron(base_dir, PATRON_INV_FILE)
+    """
+    Carga INVENTARIO GENERAL ACTUALIZADO desde el ERP.
+    ⚠️ NO USA FALLBACK - Si no encuentra el archivo, detiene el proceso con error.
+    """
     
-    if not p:
-        # Fallback: intentar con el nombre exacto
-        p_pl = base_dir / PATRON_INV_FILE
-        if p_pl.exists():
-            p = p_pl
-        else:
-            # Intentar con diferentes variantes
-            for pref in ["2026 INVENTARIO GENERAL", "INVENTARIO GENERAL"]:
-                try:
-                    p = find_by_prefix(base_dir, pref)
-                    break
-                except Exception:
-                    p = None
-            
-            if p is None:
-                raise FileNotFoundError(
-                    f"No encontré ni '{PFX_INV_ACTUALIZADO}' ni '{PATRON_INV_FILE}' en {base_dir}"
-                )
-    log(f"[Fallback] Abriendo plantilla de inventario: {p.name}")
-    df = read_excel_header_at(p, sheet=SHEET_INV_ORIG, header_row_visible=HEADER_ROW_INV)
+    log("="*70)
+    log("BUSCANDO INVENTARIO GENERAL ACTUALIZADO (ERP)")
+    log("="*70)
+    
+    # ✅ Buscar archivo del día actual en carpeta del mes
+    # ⚠️ Si falla, levanta FileNotFoundError y detiene el proceso
+    p = buscar_inventario_actualizado_hoy(base_dir)
+    
+    log(f"✅ Abriendo inventario actualizado (ERP): {p.name}")
+    log(f"   📁 Ubicación: {p.parent}")
+    log("="*70)
+    
+    # Manejo de contraseñas
+    src = open_as_excel_source(p, PASSWORDS_TRY)
+    df = read_excel_header_at(src, sheet="Sheet 1", header_row_visible=1)
+    
     idx = {_norm(c): c for c in df.columns}
 
     ref_col = (
-        idx.get("referencia") or idx.get("referencia fertrac") or idx.get("referencia interna")
-        or idx.get("ref") or idx.get("código") or idx.get("codigo")
+        idx.get("referencia") or idx.get("referencia interna") or idx.get("ref")
+        or idx.get("codigo") or idx.get("código")
         or next((real for kn, real in idx.items() if "referenc" in kn or "codigo" in kn or kn.endswith("ref")), None)
     )
     if not ref_col:
-        raise KeyError(f"{p.name}: no encuentro columna 'REFERENCIA'. Encabezados: {list(df.columns)}")
+        raise KeyError(f"{p.name}: no encuentro columna de Referencia. Encabezados: {list(df.columns)}")
 
     df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
-    df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)
+    
+    # Normalización de referencias
+    df["__REFERENCIA__"] = df[ref_col].apply(to_num_str)    
 
-    nombre_odoo = idx.get("nombre odoo") or idx.get("nombre")
-    marca_sys   = idx.get("marca sistema")
-    linea_sys   = idx.get("linea sistema") or idx.get("línea sistema")
-    sub_sys     = idx.get("sub- linea sistema") or idx.get("sub-linea sistema") or idx.get("sub linea sistema")
-    costo_prom  = idx.get("costo promedio") or idx.get("costo prom")
+    nom_col     = idx.get("nombre") or "Nombre"
+    marca_col   = next((real for kn, real in idx.items()
+                        if ("marca/ nombre a mostrar" in kn) or ("marca nombre a mostrar" in kn) or (kn == "marca")), None) \
+                  or next((real for kn, real in idx.items() if "marca" in kn and "mostrar" in kn), None)
+    linea_col   = next((real for kn, real in idx.items()
+                        if ("linea/ nombre a mostrar" in kn) or ("línea/ nombre a mostrar" in kn)), None) \
+                  or next((real for kn, real in idx.items() if "linea" in kn and "mostrar" in kn), None)
+    sublinea_col = next((real for kn, real in idx.items() if "sub" in kn and "linea" in kn and "mostrar" in kn), None)
+    costo_col   = idx.get("costo") or "Costo"
 
     rename = {}
-    if nombre_odoo in df.columns: rename[nombre_odoo] = "__NOMBRE__"
-    if marca_sys   in df.columns: rename[marca_sys]   = "__MARCA_SYS__"
-    if linea_sys   in df.columns: rename[linea_sys]   = "__LINEA_SYS__"
-    if sub_sys     in df.columns: rename[sub_sys]     = "__SUBLINEA_SYS__"
-    if costo_prom  in df.columns: rename[costo_prom]  = "__COSTO__"
-
-    return df.rename(columns=rename)
-
+    if nom_col      in df.columns: rename[nom_col]      = "__NOMBRE__"
+    if marca_col    in df.columns: rename[marca_col]    = "__MARCA_SYS__"
+    if linea_col    in df.columns: rename[linea_col]    = "__LINEA_SYS__"
+    if sublinea_col in df.columns: rename[sublinea_col] = "__SUBLINEA_SYS__"
+    if costo_col    in df.columns: rename[costo_col]    = "__COSTO__"
+    
+    df_final = df.rename(columns=rename)
+    
+    return df_final
 
 # ============================================================================
 # FUNCIÓN: ACTUALIZAR REFERENCIAS DESDE FORMATO CODIFICACIÓN
@@ -1479,10 +1401,40 @@ def actualizar_referencias_inventario_original(wb, ws_inv_orig, base_path: Path,
         log(traceback.format_exc())
         return 0
     
-def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
-    """Lee VALORIZADO* (header visible en fila 9)."""
-    p = find_by_prefix(base_dir, prefix)
-    log(f"Abrir: {p.name}")
+def cargar_valorizado(base_dir: Path, prefix: str, extra_paths: list = None, validar_fecha_hoy: bool = True) -> pd.DataFrame:
+    """
+    Lee VALORIZADO* (header visible en fila 9).
+    
+    Args:
+        base_dir: Directorio base de búsqueda
+        prefix: Prefijo del archivo a buscar
+        extra_paths: Directorios adicionales donde buscar
+        validar_fecha_hoy: Si True, solo acepta archivos modificados hoy (default: True)
+    
+    Returns:
+        DataFrame con __REF_INT__ y __CANT__
+    """
+    
+    # Construir lista de rutas a buscar
+    search_paths = [base_dir]
+    if extra_paths:
+        search_paths.extend(extra_paths)
+    
+    # ✅ NUEVA VALIDACIÓN: Buscar archivo con validación de fecha
+    try:
+        p = find_by_prefix_multi(prefix, search_paths, validar_fecha_hoy=validar_fecha_hoy)
+        log(f"Abrir: {p.name}")
+    except FileNotFoundError as e:
+        if validar_fecha_hoy:
+            log(f"❌ ERROR: {e}")
+            log(f"💡 Los archivos valorizados deben ser generados HOY para evitar datos desactualizados")
+            raise FileNotFoundError(
+                f"No se encontró '{prefix}' con fecha de HOY.\n"
+                f"Por favor, genera los valorizados actualizados desde el ERP."
+            )
+        else:
+            raise
+    
     src = open_as_excel_source(p, PASSWORDS_TRY)
 
     if p.suffix.lower() == ".csv":
@@ -1501,12 +1453,9 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
 
     idx = {_norm(c): c for c in df.columns}
 
-    # FORZAR a buscar EXACTAMENTE "Referencia interna"
     refc = idx.get("referencia interna")
-
-    # Si no encuentra, buscar alternativas PERO mostrar advertencia
     if not refc:
-        log(f"  ⚠️ ADVERTENCIA: No se encontró columna 'Referencia interna' en {p.name}")
+        log(f"  ------ ADVERTENCIA: No se encontró columna 'Referencia interna' en {p.name}")
         log(f"     Columnas disponibles: {list(df.columns)}")
         refc = idx.get("referencia") or idx.get("ref") \
             or next((real for kn, real in idx.items() if "referenc" in kn), None)
@@ -1515,7 +1464,7 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
 
     cant = idx.get("cantidad")
     if not cant:
-        log(f"  ⚠️ ADVERTENCIA: No se encontró columna 'Cantidad' en {p.name}")
+        log(f"  ------ ADVERTENCIA: No se encontró columna 'Cantidad' en {p.name}")
         log(f"     Columnas disponibles: {list(df.columns)}")
         cant = next((real for kn, real in idx.items() if kn.startswith("cant")), None)
         if cant:
@@ -1525,19 +1474,31 @@ def cargar_valorizado(base_dir: Path, prefix: str) -> pd.DataFrame:
     if not cant: raise KeyError(f"{p.name}: no encuentro 'Cantidad'. Encabezados: {list(df.columns)}")
 
     out = pd.DataFrame()
-    # 🔹 NORMALIZACIÓN: Aplicar to_num_str
     out["__REF_INT__"] = df[refc].apply(to_num_str)
     out["__CANT__"]    = pd.to_numeric(df[cant], errors="coerce").fillna(0.0)
     
-    # 🔹 VERIFICACIÓN: Buscar referencias problemáticas
-    for ref_buscar in ["95276", "500845"]:
-        if ref_buscar in out["__REF_INT__"].values:
-            cantidad = out[out["__REF_INT__"] == ref_buscar]["__CANT__"].iloc[0]
-    
     return out
 
-def cargar_valorizado_desde_ruta(archivo_path: Path) -> pd.DataFrame:
-    """Lee VALORIZADO desde ruta específica."""
+def cargar_valorizado_desde_ruta(archivo_path: Path, validar_fecha_hoy: bool = True) -> pd.DataFrame:
+    """
+    Lee VALORIZADO desde ruta específica.
+    
+    Args:
+        archivo_path: Path completo del archivo
+        validar_fecha_hoy: Si True, solo acepta archivos modificados hoy (default: True)
+    
+    Returns:
+        DataFrame con __REF_INT__ y __CANT__
+    """
+    
+    # ✅ NUEVA VALIDACIÓN: Verificar fecha antes de procesar
+    if validar_fecha_hoy:
+        if not validar_fecha_archivo_hoy(archivo_path):
+            raise FileNotFoundError(
+                f"El archivo '{archivo_path.name}' no fue modificado HOY.\n"
+                f"Por favor, genera los valorizados actualizados desde el ERP."
+            )
+    
     log(f"Abriendo: {archivo_path.name}")
     src = open_as_excel_source(archivo_path, PASSWORDS_TRY)
 
@@ -1849,20 +1810,22 @@ def cargar_distribucion(base_dir: Path) -> dict:
         log(traceback.format_exc())
         return {'gestor': {}, 'clasificacion': {}}
     
-def cargar_consolidado_remisiones(base_dir: Path) -> pd.DataFrame:
+def cargar_mayor_existencia(base_dir: Path) -> pd.DataFrame:
     """
-    Carga el archivo CONSOLIDADO REMISIONES 2019-2026, hojas RM y RMC.
-    Retorna REFERENCIA, CANT RM y CANT RMC desde tablas dinámicas.
+    Carga el archivo MAYOR EXISTENCIA, hoja COSTOS INV FINAL.
+    Retorna REFERENCIA FERTRAC y REM EN CONSIG.
+    
+    NUEVO: Trabaja con copias temporales si el archivo está abierto.
     """
     archivo_trabajo = None
     es_copia_temporal = False
     
     try:
-        # 1. Buscar archivo usando la constante global
-        p = find_by_prefix(base_dir, PFX_CONSOLIDADO_REMISIONES)  # ✅ Usa la constante
+        # 1. Buscar archivo (ignorando temporales)
+        p = find_by_prefix(base_dir, PFX_MAYOR_EXISTENCIA)
         log(f"Archivo encontrado: {p.name}")
         
-        # 2. Obtener archivo de trabajo
+        # 2. Obtener archivo de trabajo (original o copia)
         archivo_trabajo, es_copia_temporal = obtener_archivo_trabajo(
             p, 
             crear_copia_si_bloqueado=True
@@ -1871,155 +1834,143 @@ def cargar_consolidado_remisiones(base_dir: Path) -> pd.DataFrame:
         if es_copia_temporal:
             log(f"  💡 Trabajando con copia temporal (archivo original en uso)")
         
-        log(f"Abriendo Consolidado Remisiones: {archivo_trabajo.name}")
+        log(f"Abriendo Mayor Existencia: {archivo_trabajo.name}")
         
-        # 3. Abrir archivo
+        # 3. Abrir el archivo
         src = open_as_excel_source(archivo_trabajo, PASSWORDS_TRY)
+        
+        # 4. Buscar hoja COSTOS INV FINAL
         xf = pd.ExcelFile(src, engine="openpyxl")
+        sheet_found = None
         
-        # 4. Diccionarios para almacenar datos por hoja
-        datos_rm = {}
-        datos_rmc = {}
+        for sn in xf.sheet_names:
+            sn_norm = _norm(sn)
+            if "costos" in sn_norm and "inv" in sn_norm and "final" in sn_norm:
+                sheet_found = sn
+                log(f"Hoja encontrada: '{sn}'")
+                break
         
-        # 5. Procesar hoja RM
-        if "RM" in xf.sheet_names:
-            log(f"\n--- Procesando hoja: RM ---")
-            datos_rm = _procesar_hoja_tabla_dinamica(src, "RM")
-            log(f"Hoja RM: {len(datos_rm)} referencias cargadas")
-        else:
-            log("  ⚠ Hoja 'RM' no encontrada")
+        if not sheet_found:
+            for sn in xf.sheet_names:
+                sn_norm = _norm(sn)
+                if "costo" in sn_norm or "final" in sn_norm:
+                    sheet_found = sn
+                    log(f"Hoja encontrada (alternativa): '{sn}'")
+                    break
         
-        # 6. Procesar hoja RMC
-        if "RMC" in xf.sheet_names:
-            log(f"\n--- Procesando hoja: RMC ---")
-            datos_rmc = _procesar_hoja_tabla_dinamica(src, "RMC")
-            log(f"Hoja RMC: {len(datos_rmc)} referencias cargadas")
-        else:
-            log("  ⚠ Hoja 'RMC' no encontrada")
+        if not sheet_found:
+            sheet_found = xf.sheet_names[0]
+            log(f"  ⚠ Usando primera hoja: '{sheet_found}'")
         
-        # 7. Combinar datos de ambas hojas
-        todas_refs = set(datos_rm.keys()) | set(datos_rmc.keys())
+        # 5. Leer archivo buscando el encabezado
+        df_raw = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=None)
         
-        if len(todas_refs) == 0:
-            log("  ⚠ No se cargaron datos de ninguna hoja")
-            limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
-            return pd.DataFrame(columns=["__REF_CONSOL__", "__CANT_RM__", "__CANT_RMC__"])
-        
-        # 8. Construir DataFrame final
-        out = pd.DataFrame({
-            "__REF_CONSOL__": list(todas_refs),
-            "__CANT_RM__": [datos_rm.get(ref, 0) for ref in todas_refs],
-            "__CANT_RMC__": [datos_rmc.get(ref, 0) for ref in todas_refs]
-        })
-        
-        # 9. Estadísticas
-        rm_no_cero = (out["__CANT_RM__"] != 0).sum()
-        rmc_no_cero = (out["__CANT_RMC__"] != 0).sum()
-        
-        log(f"\n✅ Consolidado Remisiones cargado: {len(out)} referencias únicas")
-        log(f"   UND RM: {rm_no_cero} valores diferentes de cero")
-        log(f"   UND RMC: {rmc_no_cero} valores diferentes de cero")
-        
-        # 10. Limpieza
-        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
-        
-        return out
-        
-    except FileNotFoundError:
-            log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_CONSOLIDADO_REMISIONES}'.")
-            limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
-            return pd.DataFrame(columns=["__REF_CONSOL__", "__CANT_RM__", "__CANT_RMC__"])
-        
-    except Exception as e:
-        log(f"⚠ ERROR al cargar Consolidado Remisiones: {e}")
-        import traceback
-        log(traceback.format_exc())
-        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
-        return pd.DataFrame(columns=["__REF_CONSOL__", "__CANT_RM__", "__CANT_RMC__"])
-
-
-def _procesar_hoja_tabla_dinamica(src, nombre_hoja: str) -> dict:
-    """
-    Procesa una hoja de tabla dinámica y retorna dict {REFERENCIA: CANTIDAD}.
-    Busca columnas: 'Etiquetas de fila' y 'Suma de CANT PDTE X FACT'
-    """
-    try:
-        # Leer hoja completa
-        df_raw = pd.read_excel(src, sheet_name=nombre_hoja, engine="openpyxl", header=None)
-        
-        # Buscar fila de encabezado
+        # 6. Buscar fila de encabezado
         header_row_idx = None
         for idx in range(min(20, len(df_raw))):
             row_str = ' '.join([str(v).upper() for v in df_raw.iloc[idx] if pd.notna(v)])
-            if "ETIQUETAS DE FILA" in row_str or ("SUMA" in row_str and "CANT" in row_str):
+            if ("REFERENCIA" in row_str or "REF" in row_str) and ("CONSIG" in row_str or "REM" in row_str):
                 header_row_idx = idx
                 log(f"Encabezado encontrado en fila {idx + 1}")
                 break
         
         if header_row_idx is None:
-            header_row_idx = 2  # Por defecto fila 3 (índice 2) para tablas dinámicas
-            log(f"  ⚠ Usando fila 3 como encabezado por defecto")
+            header_row_idx = HEADER_ROW_MAYOR_EXIST - 1
+            log(f"  ⚠ Usando fila de encabezado configurada: {HEADER_ROW_MAYOR_EXIST}")
         
-        # Leer con encabezado
-        df = pd.read_excel(src, sheet_name=nombre_hoja, engine="openpyxl", header=header_row_idx)
+        # 7. Leer con el encabezado correcto
+        df = pd.read_excel(src, sheet_name=sheet_found, engine="openpyxl", header=header_row_idx)
+        
         df.columns = [str(c).strip() for c in df.columns]
         
-        # Buscar columna de REFERENCIA (Etiquetas de fila)
+        # 8. BUSCAR: REFERENCIA FERTRAC
         ref_col = None
         for col_name in df.columns:
             col_norm = _norm(col_name)
-            if "etiqueta" in col_norm and "fila" in col_norm:
+            if "referencia" in col_norm and "fertrac" in col_norm:
                 ref_col = col_name
-                log(f"Columna REFERENCIA encontrada: '{col_name}'")
+                log(f"Columna REFERENCIA FERTRAC encontrada: '{col_name}'")
                 break
         
         if not ref_col:
-            # Buscar primera columna que no sea vacía
-            ref_col = df.columns[0]
-            log(f"  ⚠ Usando primera columna como REFERENCIA: '{ref_col}'")
-        
-        # Buscar columna de CANTIDAD (Suma de CANT PDTE X FACT)
-        cant_col = None
-        for col_name in df.columns:
-            col_norm = _norm(col_name)
-            if "suma" in col_norm and "cant" in col_norm:
-                cant_col = col_name
-                log(f"Columna CANTIDAD encontrada: '{col_name}'")
-                break
-        
-        if not cant_col:
-            # Buscar segunda columna numérica
-            for col_name in df.columns[1:]:
-                if pd.api.types.is_numeric_dtype(df[col_name]):
-                    cant_col = col_name
-                    log(f"  ⚠ Usando columna numérica como CANTIDAD: '{col_name}'")
+            for col_name in df.columns:
+                col_norm = _norm(col_name)
+                if col_norm == "referencia" or col_norm.startswith("referencia "):
+                    ref_col = col_name
+                    log(f"Columna REFERENCIA encontrada: '{col_name}'")
                     break
         
-        if not cant_col:
-            log(f"  ⚠ No se encontró columna de CANTIDAD en '{nombre_hoja}'")
-            return {}
+        if not ref_col:
+            for col_name in df.columns[:10]:
+                col_norm = _norm(col_name)
+                if "ref" in col_norm or "codigo" in col_norm:
+                    ref_col = col_name
+                    log(f"Columna REFERENCIA encontrada (alternativa): '{col_name}'")
+                    break
         
-        # Filtrar filas válidas (excluir totales, etc.)
+        # 9. BUSCAR: REM EN CONSIG
+        rem_consig_col = None
+        
+        for col_name in df.columns:
+            col_norm = _norm(col_name)
+            if col_norm == "rem en consig":
+                rem_consig_col = col_name
+                log(f"Columna REM EN CONSIG encontrada: '{col_name}'")
+                break
+        
+        if not rem_consig_col:
+            for col_name in df.columns:
+                col_norm = _norm(col_name)
+                if "rem" in col_norm and "consig" in col_norm:
+                    rem_consig_col = col_name
+                    log(f"Columna REM EN CONSIG encontrada (variante): '{col_name}'")
+                    break
+        
+        if not rem_consig_col:
+            for col_name in df.columns:
+                col_norm = _norm(col_name)
+                if "consignacion" in col_norm or "consig" in col_norm:
+                    rem_consig_col = col_name
+                    log(f"  ⚠ Usando columna que contiene 'consig': '{col_name}'")
+                    break
+        
+        if not ref_col:
+            raise KeyError(f"No encontré columna REFERENCIA en {p.name}. Columnas: {list(df.columns)}")
+        if not rem_consig_col:
+            raise KeyError(f"No encontré columna REM EN CONSIG en {p.name}. Columnas: {list(df.columns)}")
+        
+        # 10. Filtrar filas válidas
         df = df[~df[ref_col].isna() & (df[ref_col].astype(str).str.strip() != "")].copy()
         
-        # Excluir fila de "Total general" si existe
-        df = df[~df[ref_col].astype(str).str.contains("Total", case=False, na=False)]
+        # 11. Construir DataFrame de salida
+        out = pd.DataFrame()
+        out["__REF_MAYOR__"] = df[ref_col].apply(to_num_str)
+        out["__REM_CONSIG__"] = pd.to_numeric(df[rem_consig_col], errors="coerce").fillna(0)
         
-        # Crear diccionario {REFERENCIA: CANTIDAD}
-        resultado = {}
-        for _, row in df.iterrows():
-            ref = to_num_str(row[ref_col])
-            cant = pd.to_numeric(row[cant_col], errors="coerce")
-            
-            if ref and pd.notna(cant):
-                resultado[ref] = float(cant) if cant != 0 else 0
+        # 12. Eliminar duplicados
+        out = out.drop_duplicates(subset=["__REF_MAYOR__"], keep="first")
         
-        return resultado
+        # 13. Estadísticas
+        valores_no_cero = (out["__REM_CONSIG__"] != 0).sum()
+        log(f"Mayor Existencia cargada: {len(out)} referencias")
+        log(f"REM EN CONSIG: {valores_no_cero} valores diferentes de cero")
+        
+        # 14. LIMPIEZA: Eliminar copia temporal si se creó
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
+        
+        return out
+        
+    except FileNotFoundError:
+        log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_MAYOR_EXISTENCIA}'.")
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
+        return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
         
     except Exception as e:
-        log(f"  ❌ Error procesando hoja '{nombre_hoja}': {e}")
-        return {}
-
+        log(f"⚠ ERROR al cargar Mayor Existencia: {e}")
+        import traceback
+        log(traceback.format_exc())
+        limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
+        return pd.DataFrame(columns=["__REF_MAYOR__", "__REM_CONSIG__"])
 
 def aplicar_reglas_marcas_propias(ws_inv_copia, start_data_row: int, last_row: int, 
                                    ref_col_idx: int, hdrn_copia: dict, 
@@ -2293,43 +2244,13 @@ def eliminar_registros_linea_copia_indeterminada(wsinvcopia, startdatarow: int, 
         
         log(f"Analizando {len(referencias)} registros...")
         
-        # Leer datos adicionales para el reporte
-        col_nombre = hdrncopia.get(_norm("NOMBRE MYR"))
-        col_marca = hdrncopia.get(_norm("MARCA COPIA"))
-
-        if col_nombre and col_nombre not in colstoread:
-            colstoread.append(col_nombre)
-        if col_marca and col_marca not in colstoread:
-            colstoread.append(col_marca)
-
-        data = read_multiple_columns_optimized(wsinvcopia, startdatarow, lastrow, colstoread)
-        referencias = data[refcolidx]
-        lineascopia = data[collineacopia]
-
         for i in range(len(referencias)):
             ref = str(referencias[i]).strip() if referencias[i] not in [None, "", "None"] else ""
             linea = str(lineascopia[i]).strip() if lineascopia[i] not in [None, "", "None"] else ""
             linea_upper = linea.upper()
             
-            # Filtrar los indeterminados
+            # Filtrar los indeterminados: #N/D, N/A, NA, etc.
             if linea_upper in ["INDETERMINADO", "#N/D", "N/D", "NA", "N/A", "#N/A", "NONE", ""]:
-                fila_excel = startdatarow + i
-                
-                # Obtener datos adicionales
-                nombre = str(data[col_nombre][i]) if col_nombre and i < len(data.get(col_nombre, [])) else ""
-                marca = str(data[col_marca][i]) if col_marca and i < len(data.get(col_marca, [])) else ""
-                
-                # Registrar en tracker
-                TRACKER_ELIMINACIONES.registrar(
-                    paso="2. LINEA COPIA Indeterminada",
-                    fila_excel=fila_excel,
-                    referencia=ref,
-                    nombre=nombre,
-                    marca=marca,
-                    linea=linea if linea else "(vacío)",
-                    motivo=f"LINEA COPIA indeterminada: '{linea}'"
-                )
-                
                 filas_a_eliminar.append((i, ref, linea))
         
         # Eliminar filas
@@ -2470,12 +2391,15 @@ def procesar_existencias_negativas_y_cero(ws_inv_copia, start_data_row: int, las
                 # Generar nombre del archivo
                 fecha_actual = datetime.now().strftime("%Y%m%d_%H%M")
                 nombre_reporte = f"REPORTE_EXISTENCIAS_NEGATIVAS_{fecha_actual}.xlsx"
-                ruta_reporte = base_path / nombre_reporte
-                
+                ruta_reporte = OUTPUT_PATH / nombre_reporte  # ✅ Cambio: base_path → OUTPUT_PATH
+
+                # Asegurar que la carpeta existe
+                OUTPUT_PATH.mkdir(parents=True, exist_ok=True)  # ✅ Añadir esta línea
+
                 # Guardar Excel
                 df_negativos.to_excel(ruta_reporte, index=False, engine='openpyxl')
                 log(f"Reporte generado: {nombre_reporte}")
-                log(f" 📁 Ubicación: {ruta_reporte}")
+                log(f" [>>] Ubicacion: {ruta_reporte}")  # ✅ Cambio: eliminar emoji 📁
                 
                 # Mostrar ejemplos
                 for reg in registros_negativos:
@@ -2521,7 +2445,7 @@ def excel_open(path: Path, password: str | None = None):
     """Abre con COM en modo silencioso y OPTIMIZADO."""
     excel = win32.DispatchEx("Excel.Application")
     excel.Visible = False
-    excel.DisplayAlerts = True
+    excel.DisplayAlerts = False
     excel.Interactive = False
     excel.EnableEvents = False
     excel.ScreenUpdating = False
@@ -2572,106 +2496,12 @@ def excel_open(path: Path, password: str | None = None):
         raise RuntimeError(f"No pude abrir el libro {path.name} de forma silenciosa.") from e
 
 def excel_close(excel, wb, save=True):
-    """
-    Cierra SOLO el workbook y la instancia de Excel creados por este script.
-    
-    ✅ NO afecta otros archivos Excel abiertos manualmente.
-    ✅ NO cierra otras instancias de Excel.
-    
-    Args:
-        excel: Instancia de Excel creada con DispatchEx
-        wb: Workbook específico a cerrar
-        save: Si True, guarda cambios antes de cerrar
-    """
     try:
-        # ========================================
-        # 1. RESTAURAR ALERTAS Y CONFIGURACIONES
-        # ========================================
-        if excel:
-            try:
-                log("  🔔 Restaurando configuración de Excel del script...")
-                excel.DisplayAlerts = True
-                excel.ScreenUpdating = True
-                excel.Interactive = True
-                log("  ✅ Configuración restaurada")
-            except Exception as e:
-                log(f"  ⚠️ No se pudo restaurar configuración: {e}")
-        
-        # ========================================
-        # 2. CERRAR WORKBOOK ESPECÍFICO
-        # ========================================
-        if wb:
-            try:
-                # Obtener nombre del archivo para logging
-                archivo_nombre = "desconocido"
-                try:
-                    archivo_nombre = wb.Name
-                except:
-                    pass
-                
-                if save:
-                    log(f"  💾 Guardando cambios en '{archivo_nombre}'...")
-                    excel.Calculation = -4105  # xlCalculationAutomatic
-                    wb.Save()
-                    log("  ✅ Cambios guardados")
-                
-                log(f"  📕 Cerrando workbook '{archivo_nombre}'...")
-                wb.Close(SaveChanges=save)
-                log("  ✅ Workbook cerrado")
-                
-            except Exception as e:
-                log(f"  ⚠️ Error al cerrar workbook: {e}")
-                # Intentar cerrar sin guardar
-                try:
-                    wb.Close(SaveChanges=False)
-                    log("  ⚠️ Workbook cerrado SIN guardar")
-                except:
-                    pass
-        
-    except Exception as e:
-        log(f"  ❌ Error en proceso de cierre: {e}")
-    
+        if save:
+            excel.Calculation = -4105  
+        wb.Close(SaveChanges=save)
     finally:
-        # ========================================
-        # 3. CERRAR INSTANCIA DE EXCEL DEL SCRIPT
-        # ========================================
-        if excel:
-            try:
-                # Obtener PID para confirmar que es nuestra instancia
-                pid = "desconocido"
-                try:
-                    import win32process
-                    import win32api
-                    hwnd = excel.Hwnd
-                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                except:
-                    pass
-                
-                log(f"  📊 Cerrando instancia de Excel del script (PID: {pid})...")
-                log("  ℹ️  Otros archivos Excel abiertos NO se verán afectados")
-                
-                excel.Quit()
-                log("  ✅ Instancia de Excel cerrada exitosamente")
-                
-            except Exception as e:
-                log(f"  ⚠️ Error al cerrar Excel: {e}")
-        
-        # ========================================
-        # 4. LIBERAR RECURSOS COM
-        # ========================================
-        try:
-            if wb:
-                del wb
-            if excel:
-                del excel
-        except:
-            pass
-        
-        # Forzar garbage collection
-        import gc
-        gc.collect()
-        
-        log("  🧹 Recursos COM liberados")
+        excel.Quit()
 
 def ws_headers(ws, header_row_visible: int) -> tuple[dict, dict]:
     """Devuelve (mapa header→col_idx, mapa normalizado→col_idx)"""
@@ -3167,17 +2997,6 @@ def eliminar_registros_estandarizados(ws_inv_copia, start_data_row: int, last_ro
             
             # Si cumple algún criterio, agregar a lista de eliminación
             if motivo_eliminacion:
-                fila_excel = start_data_row + i
-                
-                # Registrar en tracker
-                TRACKER_ELIMINACIONES.registrar(
-                    paso="3. CRITERIOS ESTANDARIZADOS",
-                    fila_excel=fila_excel,
-                    referencia=ref,
-                    nombre=nombre,
-                    motivo=motivo_eliminacion
-                )
-                
                 filas_a_eliminar.append((i, ref, nombre, motivo_eliminacion))
         
         # Mostrar referencias protegidas que se encontraron
@@ -3694,167 +3513,6 @@ def enviar_correo_exito(archivo_generado: Path, estadisticas: dict):
         import traceback
         log(traceback.format_exc())
 
-import re
-def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
-    """
-    Convierte SOLO textos numéricos puros (1–12 dígitos) a número.
-    ULTRA-OPTIMIZADO: Minimiza accesos COM al máximo
-    """
-    import traceback
-    import pandas as pd
-    import numpy as np
-
-    patron_numerico = re.compile(r"^\d{1,12}$")
-
-    def procesar_rango_ultra_rapido(ws, col_idx, primera_fila, nombre_col):
-        """Procesa rango con mínimos accesos COM"""
-        log(f"\n  📍 Procesando hoja '{ws.Name}' col {nombre_col}...")
-
-        # 1) Última fila (1 acceso COM)
-        ultima_fila = ws.Cells(ws.Rows.Count, col_idx).End(-4162).Row
-        if ultima_fila < primera_fila:
-            log(f"     ⚠️ No hay datos desde fila {primera_fila}")
-            return
-
-        total_filas = ultima_fila - primera_fila + 1
-        
-        # 2) Leer TODO el rango (1 acceso COM)
-        rango = ws.Range(ws.Cells(primera_fila, col_idx), ws.Cells(ultima_fila, col_idx))
-        valores_raw = rango.Value
-        
-        # Normalizar a lista
-        if not isinstance(valores_raw, tuple):
-            valores = [valores_raw]
-        else:
-            valores = [fila[0] if isinstance(fila, tuple) else fila for fila in valores_raw]
-        
-        # 3) Crear DataFrame para procesamiento vectorizado
-        df = pd.DataFrame({'original': valores})
-        df['original'] = df['original'].fillna('')
-        df['original_str'] = df['original'].astype(str).str.strip()
-        
-        # 4) Clasificación vectorizada (TODO en pandas, sin loops)
-        # Detectar separadores
-        tiene_separadores = df['original_str'].str.contains(r'[/\-\s]', regex=True, na=False)
-        
-        # Detectar numéricos puros (1-12 dígitos)
-        es_numerico_puro = df['original_str'].str.match(r'^\d{1,12}$', na=False)
-        
-        # Detectar "01", "001", etc (números que empiezan con 0 o son "1" con múltiples caracteres)
-        def es_texto_especial(s):
-            if pd.isna(s) or s == '':
-                return False
-            try:
-                n = int(s)
-                return n == 1 and len(s) > 1
-            except:
-                return False
-        
-        es_especial = df['original_str'].apply(es_texto_especial)
-        
-        # 5) Asignar valores finales
-        df['valor_final'] = df['original_str']  # Por defecto, texto
-        df['formato'] = '@'  # Por defecto, texto
-        
-        # Los numéricos puros que NO son especiales → convertir a número
-        mask_convertir = es_numerico_puro & ~es_especial & ~tiene_separadores
-        
-        df.loc[mask_convertir, 'valor_final'] = pd.to_numeric(
-            df.loc[mask_convertir, 'original_str'], 
-            errors='coerce'
-        ).fillna(df.loc[mask_convertir, 'original_str'])
-        
-        df.loc[mask_convertir, 'formato'] = '0'
-        
-        # 6) Preparar arrays para escritura (formato que Excel entiende)
-        valores_finales = df['valor_final'].tolist()
-        formatos_finales = df['formato'].tolist()
-        
-        # Convertir a tupla de tuplas para Excel
-        valores_excel = tuple((v,) for v in valores_finales)
-        formatos_excel = tuple((f,) for f in formatos_finales)
-        
-        # 7) CRÍTICO: Aplicar formato PRIMERO, luego valores
-        # Esto evita conflictos de conversión automática de Excel
-        try:
-            # Paso 1: Establecer TODOS los formatos (1 acceso COM)
-            rango.NumberFormat = "@"  # Primero todo a texto
-            
-            # Paso 2: Aplicar formato específico solo a números
-            indices_numericos = [i for i, fmt in enumerate(formatos_finales) if fmt == '0']
-            
-            if indices_numericos:
-                # Aplicar formato numérico solo donde corresponde
-                for idx in indices_numericos:
-                    fila = primera_fila + idx
-                    ws.Cells(fila, col_idx).NumberFormat = "0"
-            
-            # Paso 3: Escribir valores (1 acceso COM)
-            rango.Value = valores_excel
-            
-            log(f"     ✅ Procesadas {total_filas} filas ({sum(mask_convertir)} convertidas a número)")
-            
-        except Exception as e:
-            log(f"     ⚠️ Error en escritura masiva: {e}, usando método alternativo...")
-            
-            # Fallback ultra-rápido: solo escribir donde hay cambios
-            for idx in range(len(valores_finales)):
-                if mask_convertir.iloc[idx]:  # Solo procesar las que cambian
-                    fila = primera_fila + idx
-                    celda = ws.Cells(fila, col_idx)
-                    celda.NumberFormat = "0"
-                    celda.Value = valores_finales[idx]
-
-        # 8) Verificación (sample reducido)
-        log(f"     🔍 Sample de resultados:")
-        for i in range(min(3, total_filas)):
-            fila = primera_fila + i
-            c = ws.Cells(fila, col_idx)
-            tipo = "NUM" if formatos_finales[i] == '0' else "TXT"
-            log(f"        {nombre_col}{fila}: '{c.Value}' [{tipo}]")
-
-    def buscar_hoja_rapido(wb, nombres_posibles, palabras_clave=None):
-        """Búsqueda de hoja ultra-rápida"""
-        hojas_map = {}
-        for i in range(1, wb.Worksheets.Count + 1):
-            nombre = wb.Worksheets(i).Name
-            hojas_map[_norm(nombre)] = wb.Worksheets(i)
-        
-        # Búsqueda exacta/parcial
-        for nombre in nombres_posibles:
-            nombre_norm = _norm(nombre)
-            if nombre_norm in hojas_map:
-                return hojas_map[nombre_norm]
-            for hoja_norm, hoja in hojas_map.items():
-                if nombre_norm in hoja_norm:
-                    return hoja
-        
-        # Búsqueda por palabras clave
-        if palabras_clave:
-            for hoja_norm, hoja in hojas_map.items():
-                if all(pal in hoja_norm for pal in palabras_clave):
-                    return hoja
-        
-        return None
-
-    log("\n🔢 Convirtiendo texto a número (ULTRA-OPTIMIZADO con pandas)...")
-
-    try:
-        # INV LISTA PRECIOS
-        ws_lp = buscar_hoja_rapido(wb, [SHEET_INV_LISTA], ["inv", "lista", "precio"])
-        
-        if ws_lp:
-            log(f"  → Hoja lista precios: '{ws_lp.Name}'")
-            for letra, idx in [('A', 1), ('B', 2)]:
-                procesar_rango_ultra_rapido(ws_lp, idx, 2, letra)
-        else:
-            log(f"  ⚠️ No se encontró '{SHEET_INV_LISTA}'")
-
-    except Exception as e:
-        log(f"  ❌ Error: {e}")
-        log(traceback.format_exc())
-
-        
 # ==== PROCESO PRINCIPAL ====
 def main():
 
@@ -3875,31 +3533,38 @@ def main():
 
         df_src = cargar_inventario_actualizado(BASE_PATH)
 
-        # Valorizados
-        df_val_gen   = cargar_valorizado(BASE_PATH, PFX_VAL_GENERAL)
-        df_val_impo  = cargar_valorizado(BASE_PATH, PFX_VAL_FALT_IMPO)
-        
-        # FIX: Buscar VALORIZADO FALTANTES sin IMPO
+        # Valorizados - ahora buscan en múltiples ubicaciones
+        df_val_gen   = cargar_valorizado(BASE_PATH, PFX_VAL_GENERAL, extra_paths=[VALORIZADOS_EXTRA_PATH])
+        df_val_impo  = cargar_valorizado(BASE_PATH, PFX_VAL_FALT_IMPO, extra_paths=[VALORIZADOS_EXTRA_PATH])
+
+        # Búsqueda especial para VALORIZADO FALTANTES
         log("Buscando VALORIZADO FALTANTES (excluyendo IMPO)...")
         archivo_faltantes = None
-        for f in BASE_PATH.iterdir():
-            if f.is_file() and f.suffix.lower() in ('.xlsx', '.xlsm'):
-                nombre_sin_simbolos = _strip_dol_tmp(f.name)
-                nombre_normalizado = _norm(nombre_sin_simbolos)
+
+        for search_path in VALORIZADO_SEARCH_PATHS:
+            if not search_path.exists():
+                continue
                 
-                # Debe ser exactamente "VALORIZADO FALTANTES" (sin IMPO)
-                if nombre_normalizado == _norm("VALORIZADO FALTANTES"):
-                    archivo_faltantes = f
-                    log(f"  → Encontrado: {f.name}")
-                    break
+            for f in search_path.iterdir():
+                if f.is_file() and f.suffix.lower() in ('.xlsx', '.xlsm'):
+                    nombre_sin_simbolos = _strip_dol_tmp(f.name)
+                    nombre_normalizado = _norm(nombre_sin_simbolos)
+                    
+                    if nombre_normalizado == _norm("VALORIZADO FALTANTES"):
+                        archivo_faltantes = f
+                        log(f"  → Encontrado: {f.name} en {search_path.name}")
+                        break
+            
+            if archivo_faltantes:
+                break
 
         if archivo_faltantes:
             df_val_falt = cargar_valorizado_desde_ruta(archivo_faltantes)
         else:
-            log(f"  ⚠️ No encontrado, usando vacío")
+            log(f"  ------ No encontrado, usando vacío")
             df_val_falt = pd.DataFrame(columns=["__REF_INT__", "__CANT__"])
 
-        df_val_tob   = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN)
+        df_val_tob = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN, extra_paths=[VALORIZADOS_EXTRA_PATH])
         
         # Cargar Matriz USD
         df_matriz_usd = cargar_matriz_usd(BASE_PATH)
@@ -3919,19 +3584,12 @@ def main():
         distribucion = cargar_distribucion(BASE_PATH)
         log(f"Distribución: {len(distribucion['gestor'])} gestores, {len(distribucion['clasificacion'])} clasificaciones")
 
-        # CARGAR CONSOLIDADO REMISIONES
-        df_consolidado = cargar_consolidado_remisiones(BASE_PATH)
-
-        # Crear mapas separados para RM y RMC
-        rm_map = df_consolidado.set_index("__REF_CONSOL__")["__CANT_RM__"].to_dict() if len(df_consolidado) > 0 else {}
-        rmc_map = df_consolidado.set_index("__REF_CONSOL__")["__CANT_RMC__"].to_dict() if len(df_consolidado) > 0 else {}
-
-        if len(df_consolidado) > 0:
-            rm_no_cero = sum(1 for v in rm_map.values() if v != 0)
-            rmc_no_cero = sum(1 for v in rmc_map.values() if v != 0)
-            log(f"Consolidado Remisiones cargado:")
-            log(f" - RM: {rm_no_cero} referencias con valores diferentes de cero")
-            log(f" - RMC: {rmc_no_cero} referencias con valores diferentes de cero")
+        # Cargar Mayor Existencia
+        df_mayor_exist = cargar_mayor_existencia(BASE_PATH)
+        mayor_exist_map = df_mayor_exist.set_index("__REF_MAYOR__")["__REM_CONSIG__"].to_dict() if len(df_mayor_exist) > 0 else {}
+        if len(mayor_exist_map) > 0:
+            no_cero = sum(1 for v in mayor_exist_map.values() if v != 0)
+            log(f"Mayor Existencia: {no_cero} referencias con REM EN CONSIG diferente de cero")
 
         # Join de cantidades
         val_map_impo = df_val_impo.set_index("__REF_INT__")["__CANT__"]
@@ -4039,17 +3697,17 @@ def main():
                         tmp = save_bytesio_to_temp(bio, Path(matriz_path).stem)
                         matriz_tmp_path = str(tmp)
                         
-                        # Abrir con UpdateLinks=3 para desactivar vínculos
+                        # CAMBIO CRÍTICO: Abrir con UpdateLinks=3 para desactivar vínculos
                         matriz_wb = excel.Workbooks.Open(
                             str(tmp),
-                            UpdateLinks=3,
+                            UpdateLinks=3,  # ← CAMBIO CLAVE: 3 = No actualizar vínculos externos
                             ReadOnly=True,
                             IgnoreReadOnlyRecommended=True,
                             Password=pw,
                             Notify=False
                         )
                         ok = True
-                        log("   ✓ MATRIZ USD abierto (desencriptado) sin actualizar vínculos")
+                        log("   [OK] MATRIZ USD abierto (desencriptado) sin actualizar vínculos")
                         break
                     except Exception as e:
                         continue
@@ -4060,12 +3718,12 @@ def main():
                 # Abrir directamente si no está encriptado
                 matriz_wb = excel.Workbooks.Open(
                     str(matriz_path),
-                    UpdateLinks=3,
+                    UpdateLinks=3,  # ← CAMBIO CLAVE: 3 = No actualizar vínculos externos
                     ReadOnly=True,
                     IgnoreReadOnlyRecommended=True,
                     Notify=False
                 )
-                log("   ✓ MATRIZ USD abierto sin actualizar vínculos")
+                log("   [OK] MATRIZ USD abierto sin actualizar vínculos")
             
             log("")
             
@@ -4076,35 +3734,11 @@ def main():
             log("  → Puede solicitar contraseña manualmente")
             log("")
 
-        # ✅ CRÍTICO: Configurar Excel para NO actualizar vínculos durante la copia
-        log("Configurando Excel para no actualizar vínculos externos...")
-        original_ask_update = None
-        original_display_alerts = None
-
-        try:
-            # Guardar configuración original
-            original_ask_update = excel.AskToUpdateLinks
-            original_display_alerts = excel.DisplayAlerts
-            
-            # Configurar para NO actualizar vínculos ni mostrar alertas
-            excel.AskToUpdateLinks = False
-            excel.DisplayAlerts = False
-            
-            # Configurar workbook también
-            try:
-                wb.UpdateLinks = 0  # xlUpdateLinksNever
-            except:
-                pass
-            
-            log("  ✓ Excel configurado para ignorar vínculos externos")
-            
-        except Exception as e:
-            log(f"  ⚠ Error al configurar Excel: {e}")
 
         # 3) NORMALIZAR nombre de hoja INVENTARIO
         log("Normalizando nombre de hoja INVENTARIO...")
         normalized_inv_name = normalize_sheet_name(wb, SHEET_INV_ORIG)
-
+        
         try:
             ws_inv_orig = wb.Worksheets(normalized_inv_name)
         except Exception:
@@ -4113,7 +3747,7 @@ def main():
 
         # 4) ELIMINAR hoja INVENTARIO COPIA si existe
         try:
-            excel.DisplayAlerts = False  # Ya configurado arriba
+            excel.DisplayAlerts = False
             for i in range(1, wb.Worksheets.Count + 1):
                 try:
                     sheet_name = wb.Worksheets(i).Name
@@ -4140,32 +3774,33 @@ def main():
             ws_inv_copia = wb.Worksheets.Add(After=ws_inv_orig)
             ws_inv_copia.Name = SHEET_INV_COPIA
             
-            log("  Copiando contenido...")
-            # ✅ Ahora NO debería pedir contraseña
             ws_inv_orig.UsedRange.Copy(Destination=ws_inv_copia.Range("A1"))
             
             try:
                 for col in range(1, ws_inv_orig.UsedRange.Columns.Count + 1):
                     ws_inv_copia.Columns(col).ColumnWidth = ws_inv_orig.Columns(col).ColumnWidth
             except Exception as e:
-                log(f"  ⚠ Advertencia al copiar anchos: {e}")
+                log(f"Aviso: no se pudo copiar anchos de columna: {e}")
             
-            log(f"✅ Hoja '{SHEET_INV_COPIA}' creada exitosamente")
+            log(f"Hoja '{SHEET_INV_COPIA}' creada exitosamente")
             
-            # ROMPER VÍNCULOS EXTERNOS
+            
+            # ROMPER VÍNCULOS EXTERNOS: Convertir fórmulas a valores en columnas con enlaces externos
             log("Rompiendo vínculos externos en INVENTARIO COPIA...")
             try:
+                # Obtener encabezados de la copia recién creada
                 temp_hr, temp_hdr, temp_hdrn = ws_headers_smart(
                     ws_inv_copia,
                     expected_row=HEADER_ROW_INV,
                     preferred_labels=["REFERENCIA", "NOMBRE LISTA", "NOMBRE MYR"]
                 )
                 
+                # Lista de columnas que suelen tener fórmulas con enlaces externos
                 columnas_a_romper = [
-                    "NOMBRE LISTA",
-                    "NOMBRE MYR",
-                    "REFERENCIA LISTA DE PRECIOS",
-                    "PRECIO LISTA"
+                    "NOMBRE LISTA",      # Tiene fórmulas que apuntan a MATRIZ USD
+                    "NOMBRE MYR",        # Puede tener fórmulas relacionadas
+                    "REFERENCIA LISTA DE PRECIOS",  # Puede tener vínculos
+                    "PRECIO LISTA"       # Puede tener vínculos
                 ]
                 
                 columnas_rotas = 0
@@ -4173,6 +3808,7 @@ def main():
                     col_idx = temp_hdrn.get(_norm(col_name))
                     if col_idx:
                         try:
+                            # Seleccionar toda la columna desde el inicio de datos hasta el final usado
                             used_range = ws_inv_copia.UsedRange
                             last_row_temp = used_range.Rows.Count
                             
@@ -4181,28 +3817,29 @@ def main():
                                 ws_inv_copia.Cells(last_row_temp, col_idx)
                             )
                             
+                            # Convertir fórmulas a valores
+                            # Método: copiar y pegar como valores sobre sí mismo
                             col_range.Copy()
                             col_range.PasteSpecial(Paste=-4163)  # xlPasteValues
                             excel.CutCopyMode = False
                             
                             columnas_rotas += 1
-                            log(f"   ✓ Vínculos rotos en columna: {col_name}")
+                            log(f"   [OK] Vínculos rotos en columna: {col_name}")
                             
                         except Exception as e:
                             log(f"  ⚠ No se pudo romper vínculos en {col_name}: {e}")
                 
                 if columnas_rotas > 0:
-                    log(f"✅ {columnas_rotas} columna(s) convertida(s) a valores")
+                    log(f" [OK] {columnas_rotas} columna(s) convertida(s) a valores (vínculos externos eliminados)")
                 else:
-                    log("  ℹ No se encontraron columnas con vínculos externos")
+                    log("  ℹ No se encontraron columnas con posibles vínculos externos")
                     
             except Exception as e:
                 log(f"  ⚠ Error al romper vínculos externos: {e}")
+                # No es crítico, continuar con el proceso
             
         except Exception as e:
-            log(f"❌ ERROR al crear copia: {e}")
-            import traceback
-            log(traceback.format_exc())
+            log(f"ERROR al crear copia: {e}")
             raise RuntimeError(f"No se pudo crear copia de la hoja INVENTARIO: {e}")
 
         if was_protected:
@@ -4211,16 +3848,6 @@ def main():
                 log("Hoja INVENTARIO original re-protegida")
             except Exception as e:
                 log(f"Aviso al re-proteger: {e}")
-
-        # ✅ RESTAURAR configuración de Excel
-        try:
-            if original_ask_update is not None:
-                excel.AskToUpdateLinks = original_ask_update
-            if original_display_alerts is not None:
-                excel.DisplayAlerts = original_display_alerts
-            log("Configuración de Excel restaurada")
-        except:
-            pass
 
         # 6) TRABAJAR EN INVENTARIO COPIA
         log("Trabajando en hoja INVENTARIO COPIA...")
@@ -4304,99 +3931,64 @@ def main():
         costo_prom   = df_src.get("__COSTO__",        pd.Series([np.nan]*len(ref_values))).tolist()
 
         def paste_if_exists(col_name, values, number_format=None):
-            """
-            Pega valores en una columna de INVENTARIO COPIA con manejo especial para referencias.
-            
-            PREVENCIÓN: Referencias con "/" se manejan como TEXTO PURO para evitar que Excel
-            las interprete como divisiones matemáticas (ej: "910/515" no debe ser 1.766...)
-            """
             cidx = hdrn_copia.get(_norm(col_name))
             if not cidx:
                 log(f"  - Columna no encontrada: {col_name}")
                 return
             
-            # ============================================================================
-            # MANEJO ESPECIAL PARA COLUMNA REFERENCIA
-            # ============================================================================
             if col_name == "REFERENCIA":
-                # 🔍 PASO 1: Detectar si HAY referencias con "/" en los datos
                 has_slash = any("/" in str(v) for v in values if v not in (None, "", np.nan))
                 
                 if has_slash:
-                    log(f"  ⚠️  Detectadas referencias con '/' - APLICANDO PROTECCIÓN PREVENTIVA")
+                    
+                    rng = ws_inv_copia.Range(
+                        ws_inv_copia.Cells(start_data_row, cidx),
+                        ws_inv_copia.Cells(start_data_row + len(values) - 1, cidx)
+                    )
+                    
+                    rng.NumberFormat = "@"
+                    ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
                     
                     try:
-                        # 🛡️ PASO 2: Aplicar formato TEXTO a toda la columna ANTES de escribir
-                        rng = ws_inv_copia.Range(
-                            ws_inv_copia.Cells(start_data_row, cidx),
-                            ws_inv_copia.Cells(start_data_row + len(values) - 1, cidx)
-                        )
-                        rng.NumberFormat = "@"  # Formato texto
-                        
-                        # 🛡️ PASO 3: Limpiar y preparar valores como TEXTO PURO
-                        values_clean = []
+                        converted_values = []
                         for v in values:
                             if v in (None, "", np.nan):
-                                values_clean.append("")
+                                converted_values.append([""])
+                            elif "/" in str(v) or not str(v).replace(".", "").replace("-", "").isdigit():
+                                converted_values.append([v])
                             else:
-                                # Convertir a string y limpiar
-                                val_str = str(v).strip()
-                                
-                                # Eliminar .0 si existe
-                                if val_str.endswith('.0'):
-                                    val_str = val_str[:-2]
-                                
-                                # Si contiene "/", agregar apóstrofe al inicio para FORZAR texto
-                                if "/" in val_str:
-                                    values_clean.append(f"'{val_str}")  # ← CLAVE: apóstrofe
-                                else:
-                                    values_clean.append(val_str)
-                        
-                        # 🛡️ PASO 4: Escribir valores usando función optimizada
-                        ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values_clean)
-                        
-                        # 🛡️ PASO 5: Re-aplicar formato texto (por seguridad)
-                        rng.NumberFormat = "@"
-                        
-                        # 🛡️ PASO 6: Forzar alineación izquierda (típica de texto)
-                        try:
-                            rng.HorizontalAlignment = -4131  # xlLeft
-                        except Exception as e:
-                            log(f"    ⚠️  No se pudo aplicar alineación: {e}")
-                        
-                        # 🛡️ PASO 7: Ignorar advertencias de Excel sobre "número como texto"
-                        try:
-                            for i in range(1, 8):
                                 try:
-                                    rng.Errors.Item(i).Ignore = True
+                                    converted_values.append([float(v)])
                                 except:
-                                    pass
-                            ws_inv_copia.Parent.Application.ErrorCheckingOptions.NumberAsText = False
-                        except Exception:
-                            pass
+                                    converted_values.append([v])
                         
-                        log(f"  ✅ {col_name} pegada con PROTECCIÓN contra división (formato texto + apóstrofe)")
-                        return
-                        
+                        rng.Value = converted_values
                     except Exception as e:
-                        log(f"  ❌ Error en protección de referencias: {e}")
-                        # Si falla, continuar con método normal
-                
-                # Si NO hay referencias con "/" o falló la protección, usar método normal
-                # pero con formato "0" (número sin decimales)
-                ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
-                if number_format:
-                    ws_inv_copia.Columns(cidx).NumberFormat = number_format
-                log(f"  ✅ {col_name} pegada (formato numérico estándar)")
-                return
+                        log(f"    Aviso en conversión: {e}")
+                    
+                    rng.NumberFormat = "0"
+                    
+                    try:
+                        rng.HorizontalAlignment = -4131  # xlLeft
+                    except Exception as e:
+                        log(f"    Aviso en alineación: {e}")
+                    
+                    try:
+                        for i in range(1, 8):
+                            try:
+                                rng.Errors.Item(i).Ignore = True
+                            except:
+                                pass
+                        ws_inv_copia.Parent.Application.ErrorCheckingOptions.NumberAsText = False
+                    except Exception:
+                        pass
+                    
+                    log(f"Pegada columna: {col_name} (formato número, alineación izquierda)")
+                    return
             
-            # ============================================================================
-            # COLUMNAS NORMALES (NO REFERENCIA)
-            # ============================================================================
             ws_fill_column_values(ws_inv_copia, cidx, start_data_row, values)
             if number_format:
                 ws_inv_copia.Columns(cidx).NumberFormat = number_format
-            log(f"  ✅ {col_name} pegada")
 
 
         paste_if_exists("REFERENCIA", ref_values, number_format="0")
@@ -4435,20 +4027,6 @@ def main():
                     try:
                         valor = ws_inv_copia.Cells(row_idx, col_nombre_odoo).Value
                         if valor and isinstance(valor, str) and "mano de obra" in valor.lower():
-                            # Leer referencia de esta fila
-                            try:
-                                ref = str(ws_inv_copia.Cells(row_idx, ref_col_idx).Value or "")
-                                
-                                TRACKER_ELIMINACIONES.registrar(
-                                    paso="4. MANO DE OBRA",
-                                    fila_excel=row_idx,
-                                    referencia=ref,
-                                    nombre=valor,
-                                    motivo="Contiene 'Mano de obra' en NOMBRE ODOO"
-                                )
-                            except:
-                                pass
-                            
                             filas_a_eliminar.append(row_idx)
                     except Exception:
                         continue
@@ -4485,12 +4063,6 @@ def main():
                         if valor_ref and isinstance(valor_ref, str):
                             # Verificar si termina con espacio + "NF"
                             if valor_ref.endswith(" NF"):
-                                TRACKER_ELIMINACIONES.registrar(
-                                    paso="5. REFERENCIAS CON ' NF'",
-                                    fila_excel=row_idx,
-                                    referencia=valor_ref,
-                                    motivo="Referencia termina en ' NF' (espacio + NF)"
-                                )
                                 filas_a_eliminar.append(row_idx)
                     except Exception:
                         continue
@@ -4928,24 +4500,6 @@ def main():
                         valor_lider = ws_inv_copia.Cells(row_idx, col_lider_linea).Value
                         # Verificar si está vacío (None, "", espacios, etc.)
                         if not valor_lider or (isinstance(valor_lider, str) and not valor_lider.strip()):
-                            # Leer referencia y nombre
-                            try:
-                                ref = str(ws_inv_copia.Cells(row_idx, ref_col_idx).Value or "")
-                                nombre = ""
-                                col_nombre = hdrn_copia.get(_norm("NOMBRE MYR"))
-                                if col_nombre:
-                                    nombre = str(ws_inv_copia.Cells(row_idx, col_nombre).Value or "")
-                                
-                                TRACKER_ELIMINACIONES.registrar(
-                                    paso="6. LIDER LINEA VACÍO",
-                                    fila_excel=row_idx,
-                                    referencia=ref,
-                                    nombre=nombre,
-                                    motivo="LIDER LINEA está vacío"
-                                )
-                            except:
-                                pass
-                            
                             filas_a_eliminar.append(row_idx)
                     except Exception:
                         continue
@@ -5260,193 +4814,8 @@ def main():
         except Exception as e:
             log(f"  ❌ ERROR al llenar REFERENCIA LISTA DE PRECIOS: {e}")
             import traceback
-            log(traceback.format_exc())  
-            
-        # 15.5) Intercambiar columnas A y B en INV LISTA PRECIOS
-        log("Intercambiando columnas A ↔ B en INV LISTA PRECIOS...")
-        try:
-            # Buscar la hoja INV LISTA PRECIOS
-            ws_lp = None
-            target_norm = _norm(SHEET_INV_LISTA)
-            
-            for i in range(1, wb.Worksheets.Count + 1):
-                sheet_name = wb.Worksheets(i).Name
-                if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
-                    ws_lp = wb.Worksheets(i)
-                    break
-            
-            if ws_lp is None:
-                for i in range(1, wb.Worksheets.Count + 1):
-                    sheet_name_norm = _norm(wb.Worksheets(i).Name)
-                    if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
-                        ws_lp = wb.Worksheets(i)
-                        break
-            
-            if ws_lp:
-                log(f"  Procesando hoja: '{ws_lp.Name}'")
-                
-                # ✅ MÉTODO 1: Usar columna temporal (más seguro)
-                # Insertar columna temporal en C
-                ws_lp.Columns(3).Insert()
-                log("  ✓ Columna temporal insertada en C")
-                
-                # Copiar columna A → C (temporal)
-                ws_lp.Columns(1).Copy()
-                ws_lp.Columns(3).PasteSpecial(Paste=-4163)  # xlPasteValues
-                ws_lp.Columns(3).PasteSpecial(Paste=-4122)  # xlPasteFormats
-                excel.CutCopyMode = False
-                log("  ✓ Columna A copiada a temporal (C)")
-                
-                # Copiar columna B → A
-                ws_lp.Columns(2).Copy()
-                ws_lp.Columns(1).PasteSpecial(Paste=-4163)  # xlPasteValues
-                ws_lp.Columns(1).PasteSpecial(Paste=-4122)  # xlPasteFormats
-                excel.CutCopyMode = False
-                log("  ✓ Columna B movida a A")
-                
-                # Copiar columna C (temporal) → B
-                ws_lp.Columns(3).Copy()
-                ws_lp.Columns(2).PasteSpecial(Paste=-4163)  # xlPasteValues
-                ws_lp.Columns(2).PasteSpecial(Paste=-4122)  # xlPasteFormats
-                excel.CutCopyMode = False
-                log("  ✓ Columna A (desde temporal) movida a B")
-                
-                # Eliminar columna temporal (C)
-                ws_lp.Columns(3).Delete()
-                log("  ✓ Columna temporal eliminada")
-                
-                # Ajustar anchos de columna
-                try:
-                    ws_lp.Columns(1).ColumnWidth = 20  # REFERENCIA LISTA DE PRECIOS
-                    ws_lp.Columns(2).ColumnWidth = 20  # REFERENCIA FERTRAC
-                except Exception as e:
-                    log(f"  ⚠ No se pudieron ajustar anchos: {e}")
-                
-                log("✅ Columnas A y B intercambiadas exitosamente")
-                log("   Nueva disposición:")
-                log("   - Columna A: REFERENCIA LISTA DE PRECIOS")
-                log("   - Columna B: REFERENCIA FERTRAC")
-                
-            else:
-                log("  ⚠ No se encontró la hoja INV LISTA PRECIOS para intercambiar columnas")
-                
-        except Exception as e:
-            log(f"  ❌ ERROR al intercambiar columnas: {e}")
-            import traceback
-            log(traceback.format_exc())
+            log(traceback.format_exc())   
         
-
-        # 15.6) Llenar LINEA en INV LISTA PRECIOS desde INVENTARIO COPIA
-        log("Llenando LINEA en INV LISTA PRECIOS desde INVENTARIO COPIA...")
-        try:
-            # Buscar la hoja INV LISTA PRECIOS
-            ws_lp = None
-            target_norm = _norm(SHEET_INV_LISTA)
-            
-            for i in range(1, wb.Worksheets.Count + 1):
-                sheet_name = wb.Worksheets(i).Name
-                if _norm(sheet_name) == target_norm or target_norm in _norm(sheet_name):
-                    ws_lp = wb.Worksheets(i)
-                    break
-            
-            if ws_lp is None:
-                for i in range(1, wb.Worksheets.Count + 1):
-                    sheet_name_norm = _norm(wb.Worksheets(i).Name)
-                    if "inv" in sheet_name_norm and "lista" in sheet_name_norm and "precio" in sheet_name_norm:
-                        ws_lp = wb.Worksheets(i)
-                        break
-            
-            if ws_lp:
-                log(f"  Hoja encontrada: '{ws_lp.Name}'")
-                
-                # Obtener encabezados de INV LISTA PRECIOS
-                hr_lp, hdr_lp, hdrn_lp = ws_headers_smart(
-                    ws_lp, 
-                    HEADER_ROW_INV_LISTA, 
-                    ["REFERENCIA FERTRAC", "LINEA"]
-                )
-                
-                # Buscar columna REFERENCIA FERTRAC en INV LISTA PRECIOS
-                ref_fertrac_idx_lp = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
-                
-                # Buscar columna LINEA en INV LISTA PRECIOS
-                linea_idx_lp = hdrn_lp.get(_norm("LINEA"))
-                
-                if not ref_fertrac_idx_lp:
-                    log("  ⚠ Columna REFERENCIA FERTRAC no encontrada en INV LISTA PRECIOS")
-                elif not linea_idx_lp:
-                    log("  ⚠ Columna LINEA no encontrada en INV LISTA PRECIOS")
-                    log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
-                else:
-                    log(f"  ✓ Columnas encontradas:")
-                    log(f"    - REFERENCIA FERTRAC: índice {ref_fertrac_idx_lp}")
-                    log(f"    - LINEA: índice {linea_idx_lp}")
-                    
-                    # Buscar columna LINEA COPIA en INVENTARIO COPIA (columna J)
-                    linea_copia_idx = hdrn_copia.get(_norm("LINEA COPIA"))
-                    
-                    if not linea_copia_idx:
-                        log("  ⚠ Columna LINEA COPIA no encontrada en INVENTARIO COPIA")
-                    else:
-                        log(f"  ✓ Columna LINEA COPIA encontrada en INVENTARIO COPIA: índice {linea_copia_idx}")
-                        
-                        # Determinar última fila con datos en INV LISTA PRECIOS
-                        last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx_lp, hr_lp)
-                        pivot_top_lp = ws_first_pivot_row(ws_lp)
-                        if pivot_top_lp and pivot_top_lp > hr_lp:
-                            last_row_lp = min(last_row_lp, pivot_top_lp - 1)
-                        
-                        log(f"  📋 Procesando {last_row_lp - hr_lp} filas...")
-                        
-                        # Leer REFERENCIA de INVENTARIO COPIA (columna A)
-                        refs_inv_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, ref_col_idx)
-                        refs_inv_copia_norm = [to_num_str(r) for r in refs_inv_copia]
-                        
-                        # Leer LINEA COPIA de INVENTARIO COPIA (columna J)
-                        lineas_inv_copia = read_range_as_array(ws_inv_copia, start_data_row, last_row, linea_copia_idx)
-                        
-                        # Crear diccionario REFERENCIA -> LINEA COPIA
-                        linea_map = dict(zip(refs_inv_copia_norm, lineas_inv_copia))
-                        
-                        log(f"  ✓ Diccionario creado: {len(linea_map)} referencias con LINEA")
-                        
-                        # Leer REFERENCIA FERTRAC de INV LISTA PRECIOS
-                        refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx_lp)
-                        refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
-                        
-                        # Cruzar y llenar LINEA
-                        lineas_lp = []
-                        matched = 0
-                        
-                        for ref_fertrac in refs_fertrac_lp_norm:
-                            if ref_fertrac and ref_fertrac in linea_map:
-                                linea_val = linea_map[ref_fertrac]
-                                
-                                # Limpiar valor (eliminar None, nan, etc.)
-                                if linea_val and str(linea_val).strip() not in ("", "None", "nan", "NaN"):
-                                    lineas_lp.append(str(linea_val).strip())
-                                    matched += 1
-                                else:
-                                    lineas_lp.append("")
-                            else:
-                                lineas_lp.append("")
-                        
-                        # Escribir LINEA en INV LISTA PRECIOS
-                        write_range_as_array(ws_lp, hr_lp + 1, linea_idx_lp, lineas_lp)
-                        
-                        log(f"✅ LINEA actualizada en INV LISTA PRECIOS:")
-                        log(f"   - Total procesado: {len(lineas_lp)}")
-                        log(f"   - Coincidencias encontradas: {matched}")
-                        log(f"   - Sin coincidencia (vacío): {len(lineas_lp) - matched}")
-                        
-            else:
-                log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
-                
-        except Exception as e:
-            log(f"  ❌ ERROR al llenar LINEA en INV LISTA PRECIOS: {e}")
-            import traceback
-            log(traceback.format_exc())
-                    
         # 16) Llenar EXISTENCIA (con fecha) en INV LISTA PRECIOS desde INVENTARIO COPIA
         log("Llenando EXISTENCIA (con fecha) en INV LISTA PRECIOS...")
         try:
@@ -5567,12 +4936,13 @@ def main():
             import traceback
             log(traceback.format_exc())
         
-        # 17) Llenar UND RM y UND RMC en INV LISTA PRECIOS desde Consolidado Remisiones
-        log("Llenando UND RM y UND RMC en INV LISTA PRECIOS desde Consolidado Remisiones...")
+
+        # 17) Llenar UND REM CONSIGNACION en INV LISTA PRECIOS desde Mayor Existencia
+        log("Llenando UND REM CONSIGNACION en INV LISTA PRECIOS...")
         try:
-            # Verificar que tenemos datos del Consolidado
-            if len(rm_map) == 0 and len(rmc_map) == 0:
-                log("  ⚠ No hay datos de Consolidado Remisiones disponibles - saltando")
+            # Verificar que tenemos datos de Mayor Existencia
+            if len(mayor_exist_map) == 0:
+                log("  ⚠ No hay datos de Mayor Existencia disponibles - saltando")
             else:
                 # Buscar la hoja INV LISTA PRECIOS
                 ws_lp = None
@@ -5600,43 +4970,30 @@ def main():
                     # Buscar columnas necesarias
                     ref_fertrac_idx_lp = hdrn_lp.get(_norm("REFERENCIA FERTRAC"))
                     
-                    # Buscar columna UND RM (exacta y variantes)
-                    rm_idx = (
-                        hdrn_lp.get(_norm("UND RM")) or
-                        hdrn_lp.get(_norm("RM")) or
-                        hdrn_lp.get(_norm("UNIDADES RM"))
-                    )
-                    
-                    # Buscar columna UND RMC (exacta y variantes)
-                    rmc_idx = (
-                        hdrn_lp.get(_norm("UND RMC")) or
-                        hdrn_lp.get(_norm("RMC")) or
-                        hdrn_lp.get(_norm("UNIDADES RMC"))
+                    # Buscar columna UND REM CONSIGNACION (exacta y variantes)
+                    rem_consig_idx = (
+                        hdrn_lp.get(_norm("UND REM CONSIGNACION")) or
+                        hdrn_lp.get(_norm("UND REM CONSIG")) or
+                        hdrn_lp.get(_norm("REM CONSIGNACION")) or
+                        hdrn_lp.get(_norm("REM EN CONSIGNACION"))
                     )
                     
                     if not ref_fertrac_idx_lp:
                         log("  ⚠ Columna REFERENCIA FERTRAC no encontrada en INV LISTA PRECIOS")
-                    elif not rm_idx and not rmc_idx:
-                        log("  ⚠ Columnas UND RM y UND RMC no encontradas en INV LISTA PRECIOS")
+                    elif not rem_consig_idx:
+                        log("  ⚠ Columna UND REM CONSIGNACION no encontrada en INV LISTA PRECIOS")
                         log(f"     Columnas disponibles: {list(hdr_lp.keys())}")
-                        # Mostrar columnas que contengan "rm" o "rmc"
-                        posibles = [k for k in hdr_lp.keys() if 'rm' in _norm(k)]
+                        # Mostrar columnas que contengan "consig" o "rem"
+                        posibles = [k for k in hdr_lp.keys() if 'consig' in _norm(k) or 'rem' in _norm(k)]
                         if posibles:
-                            log(f"     Columnas posibles con 'rm': {posibles}")
+                            log(f"     Columnas posibles con 'consig' o 'rem': {posibles}")
                     else:
-                        # Mostrar qué columnas se encontraron
-                        columnas_encontradas = []
-                        if rm_idx:
-                            rm_col_name = [k for k, v in hdr_lp.items() if v == rm_idx][0]
-                            columnas_encontradas.append(f"UND RM: '{rm_col_name}' (índice {rm_idx})")
-                        if rmc_idx:
-                            rmc_col_name = [k for k, v in hdr_lp.items() if v == rmc_idx][0]
-                            columnas_encontradas.append(f"UND RMC: '{rmc_col_name}' (índice {rmc_idx})")
+                        # Obtener el nombre real de la columna para el log
+                        col_name_real = [k for k, v in hdr_lp.items() if v == rem_consig_idx][0]
                         
                         log(f"Columnas encontradas:")
                         log(f" - REFERENCIA FERTRAC: índice {ref_fertrac_idx_lp}")
-                        for col_info in columnas_encontradas:
-                            log(f" - {col_info}")
+                        log(f" - UND REM CONSIGNACION: '{col_name_real}' (índice {rem_consig_idx})")
                         
                         # Determinar última fila con datos en INV LISTA PRECIOS
                         last_row_lp = ws_last_row(ws_lp, ref_fertrac_idx_lp, hr_lp)
@@ -5650,93 +5007,46 @@ def main():
                         refs_fertrac_lp = read_range_as_array(ws_lp, hr_lp + 1, last_row_lp, ref_fertrac_idx_lp)
                         refs_fertrac_lp_norm = [to_num_str(r) for r in refs_fertrac_lp]
                         
-                        # Procesar UND RM si existe la columna
-                        if rm_idx and len(rm_map) > 0:
-                            log("   Procesando UND RM...")
-                            valores_rm = []
-                            matched_rm = 0
-                            valores_no_cero_rm = 0
-                            
-                            for ref_fertrac in refs_fertrac_lp_norm:
-                                if ref_fertrac and ref_fertrac in rm_map:
-                                    val = rm_map[ref_fertrac]
-                                    
-                                    # Convertir a número
-                                    try:
-                                        val_num = float(val) if val is not None else 0  # ✅ Cambiado de "" a 0
-                                        
-                                        if val_num == 0:
-                                            valores_rm.append(0)
-                                        else:
-                                            valores_rm.append(val_num)
-                                            matched_rm += 1
-                                            valores_no_cero_rm += 1
-                                    except:
-                                        valores_rm.append(0)  # ✅ Cambiado de "" a 0
-                                else:
-                                    # No hay coincidencia - escribir 0
-                                    valores_rm.append(0)  # ✅ Cambiado de "" a 0
-                            
-                            # Escribir UND RM
-                            write_range_as_array(ws_lp, hr_lp + 1, rm_idx, valores_rm)
-                            
-                            log(f"   UND RM actualizada:")
-                            log(f"    - Total procesado: {len(valores_rm)}")
-                            log(f"    - Coincidencias encontradas: {matched_rm}")
-                            log(f"    - Valores diferentes de cero: {valores_no_cero_rm}")
-                            log(f"    - Sin coincidencia (valor 0): {len(valores_rm) - matched_rm}")  # ✅ Agregado
-                        else:
-                            if not rm_idx:
-                                log("   ⚠ Columna UND RM no encontrada - saltando")
-                            else:
-                                log("   ⚠ No hay datos RM disponibles - saltando")
+                        # Cruzar con Mayor Existencia (REM EN CONSIG) para llenar UND REM CONSIGNACION
+                        valores_rem_consig = []
+                        matched = 0
+                        valores_no_cero = 0
                         
-                        # Procesar UND RMC si existe la columna
-                        if rmc_idx and len(rmc_map) > 0:
-                            log("   Procesando UND RMC...")
-                            valores_rmc = []
-                            matched_rmc = 0
-                            valores_no_cero_rmc = 0
-                            
-                            for ref_fertrac in refs_fertrac_lp_norm:
-                                if ref_fertrac and ref_fertrac in rmc_map:
-                                    val = rmc_map[ref_fertrac]
+                        for ref_fertrac in refs_fertrac_lp_norm:
+                            if ref_fertrac and ref_fertrac in mayor_exist_map:
+                                val = mayor_exist_map[ref_fertrac]
+                                
+                                # Convertir a número
+                                try:
+                                    val_num = float(val) if val is not None else ""  
                                     
-                                    # Convertir a número
-                                    try:
-                                        val_num = float(val) if val is not None else 0  # ✅ Cambiado de "" a 0
-                                        
-                                        if val_num == 0:
-                                            valores_rmc.append(0)
-                                        else:
-                                            valores_rmc.append(val_num)
-                                            matched_rmc += 1
-                                            valores_no_cero_rmc += 1
-                                    except:
-                                        valores_rmc.append(0)  # ✅ Cambiado de "" a 0
-                                else:
-                                    # No hay coincidencia - escribir 0
-                                    valores_rmc.append(0)  # ✅ Cambiado de "" a 0
-                            
-                            # Escribir UND RMC
-                            write_range_as_array(ws_lp, hr_lp + 1, rmc_idx, valores_rmc)
-                            
-                            log(f"   UND RMC actualizada:")
-                            log(f"    - Total procesado: {len(valores_rmc)}")
-                            log(f"    - Coincidencias encontradas: {matched_rmc}")
-                            log(f"    - Valores diferentes de cero: {valores_no_cero_rmc}")
-                            log(f"    - Sin coincidencia (valor 0): {len(valores_rmc) - matched_rmc}")  # ✅ Agregado
-                        else:
-                            if not rmc_idx:
-                                log("   ⚠ Columna UND RMC no encontrada - saltando")
+                                    # Si el valor es 0 desde la fuente, sí lo ponemos
+                                    if val_num == 0 or val_num == "":
+                                        valores_rem_consig.append("" if val is None or val == "" else 0)
+                                    else:
+                                        valores_rem_consig.append(val_num)
+                                        matched += 1
+                                        valores_no_cero += 1
+                                except:
+                                    valores_rem_consig.append("")  
                             else:
-                                log("   ⚠ No hay datos RMC disponibles - saltando")
+                                # No hay coincidencia - dejar en blanco
+                                valores_rem_consig.append("")  
+
+                        # Escribir en UND REM CONSIGNACION de INV LISTA PRECIOS
+                        write_range_as_array(ws_lp, hr_lp + 1, rem_consig_idx, valores_rem_consig)
+                        
+                        log(f"UND REM CONSIGNACION actualizada en INV LISTA PRECIOS:")
+                        log(f" - Total procesado: {len(valores_rem_consig)}")
+                        log(f" - Coincidencias encontradas: {matched}")
+                        log(f" - Valores diferentes de cero: {valores_no_cero}")
+                        log(f" - Sin coincidencia (valor 0): {len(valores_rem_consig) - matched}")
                         
                 else:
                     log("  ⚠ No se encontró la hoja INV LISTA PRECIOS")
                     
         except Exception as e:
-            log(f"  ❌ ERROR al llenar UND RM/RMC: {e}")
+            log(f"  ❌ ERROR al llenar UND REM CONSIGNACION: {e}")
             import traceback
             log(traceback.format_exc())
 
@@ -5799,20 +5109,6 @@ def main():
             import traceback
             log(traceback.format_exc())
 
-        # =================== NUEVO: CONVERTIR TEXTO A NÚMERO EN INV LISTA PRECIOS ===================
-        log("")
-        log("="*70)
-        log("CONVERTIR TEXTO A NÚMERO EN INV LISTA PRECIOS (COLUMNAS A y B)")
-        log("="*70)
-
-        try:
-            convertir_texto_a_numero_columnas_inv_lista(wb, excel)
-        except Exception as e:
-            log(f"❌ Error al convertir texto a número en INV LISTA PRECIOS: {e}")
-            import traceback
-            log(traceback.format_exc())
-
-        log("")
         
         # 18) GUARDADO COMO ARCHIVO NUEVO 
         log("Preparando guardado del archivo...")
@@ -5843,14 +5139,19 @@ def main():
         except NameError:
             base_name = f"{Path(PATRON_INV_FILE).stem} (ACTUALIZADO)"
         out_name = f"{base_name} {datetime.now():%Y%m%d_%H%M}.xlsx"
-        out_path = BASE_PATH / out_name
+        out_path = OUTPUT_PATH / out_name  # ✅ Cambio: BASE_PATH → OUTPUT_PATH
+
+        # Crear carpeta si no existe
+        OUTPUT_PATH.mkdir(parents=True, exist_ok=True)  # ✅ Añadir esta línea
 
         log(f"Guardando archivo (sin ordenar): {out_name}")
+        log(f"Ruta completa: {out_path}")  # ✅ Opcional: para debug
         apply_pw = saveinfo.get("reapply_password")
         if apply_pw:
             wb.SaveAs(str(out_path), FileFormat=51, Password=apply_pw)
         else:
             wb.SaveAs(str(out_path), FileFormat=51)
+
 
     
         # Aplicar ordenamiento DESPUÉS de guardar
@@ -6087,24 +5388,6 @@ def main():
                                     pass
                             
                             if esta_vacio:
-                                # Intentar leer otras columnas de la fila para el reporte
-                                try:
-                                    nombre_val = ""
-                                    # Buscar columna de descripción si existe
-                                    desc_col = hdrn_lp.get(_norm("DESCRIPCION LISTA PRECIOS"))
-                                    if desc_col:
-                                        nombre_val = str(ws_lp.Cells(row_idx, desc_col).Value or "")
-                                    
-                                    TRACKER_ELIMINACIONES.registrar(
-                                        paso="7. INV LISTA PRECIOS - REF VACÍA",
-                                        fila_excel=row_idx,
-                                        referencia="(vacío)",
-                                        nombre=nombre_val,
-                                        motivo="REFERENCIA FERTRAC vacía en INV LISTA PRECIOS"
-                                    )
-                                except:
-                                    pass
-                                
                                 filas_a_eliminar.append(row_idx)
                                 
                         except Exception as e:
@@ -6545,28 +5828,6 @@ def main():
 
         log("== Proceso completado exitosamente ==")
 
-        
-        # ===== GENERAR REPORTE DE ELIMINACIONES =====
-        log("")
-        log("="*70)
-        log("GENERANDO REPORTE DE ELIMINACIONES")
-        log("="*70)
-        
-        # Mostrar resumen en consola
-        TRACKER_ELIMINACIONES.mostrar_resumen()
-        
-        # Generar archivo Excel
-        reporte_path = TRACKER_ELIMINACIONES.generar_reporte_excel(BASE_PATH)
-        
-        if reporte_path:
-            # Agregar al diccionario de estadísticas
-            estadisticas["📋 Reporte de eliminaciones"] = reporte_path.name
-        
-        log("")
-        
-        proceso_exitoso = True
-        archivo_generado = out_path
-        
         # ===== AL FINAL DEL PROCESO EXITOSO =====
         # (Justo después de cerrar Excel, antes del último log)
         

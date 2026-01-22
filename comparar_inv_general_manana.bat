@@ -4,11 +4,11 @@ title Comparar Inventarios - Lanzador
 setlocal
 
 REM Ruta del script (mismo folder que este .bat)
-set "SCRIPT=%~dp0comparar_inv_general.py"
+set "SCRIPT=%~dp0comparar_inv_general_manana.py"
 
 if not exist "%SCRIPT%" (
     echo No se encontro el script: "%SCRIPT%"
-    echo Pon este .bat en la misma carpeta que comparar_inv_general.py
+    echo Pon este .bat en la misma carpeta que comparar_inv_general_manana.py
     pause
     exit /b 1
 )
