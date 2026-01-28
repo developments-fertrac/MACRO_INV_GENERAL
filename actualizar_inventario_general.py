@@ -120,7 +120,7 @@ EMAIL_CONFIG = {
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,  # Usado solo en método 2 (fallback)
     "sender_email": "analista_automatizacion@fertrac.com",
-    "sender_password": "lsda jbbr bnsw nlbe",  # ← Contraseña de aplicación de Google
+    "sender_password": "ssrz ldin nvyx ixry",  # ← Contraseña de aplicación de Google
     "recipient_emails": [
         "analista_automatizacion@fertrac.com",
         "data_science@fertrac.com",
