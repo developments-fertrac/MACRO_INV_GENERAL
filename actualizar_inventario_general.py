@@ -28,18 +28,33 @@ except Exception as e:
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 
 # ==== CONFIG ====
-BASE_PATH = Path(__file__).resolve().parent  
-# BASE_PATH = Path(r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026")
-# BASE_PATH = Path(r"C:\MACRO_INVENTARIO_GENERAL")
-# VALORIZADOS_EXTRA_PATH = BASE_PATH / "Pruebas Inv General" / "Valorizados"
-# OUTPUT_PATH = BASE_PATH / "Pruebas Inv General"  # ✅ Nueva ruta de salida
+# Ruta base donde están los archivos principales (Matriz USD, Marcas, Inventario General, etc.)
+ARCHIVOS_DIARIOS = Path(r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026")
 
-# Lista de directorios donde buscar valorizados (orden de prioridad)
-# VALORIZADO_SEARCH_PATHS = [BASE_PATH, VALORIZADOS_EXTRA_PATH]
+# Ruta del inventario descargado del ERP (con carpeta de mes dinámica)
+_MESES = ["01. ENERO", "02. FEBRERO", "03. MARZO", "04. ABRIL", "05. MAYO", "06. JUNIO",
+          "07. JULIO", "08. AGOSTO", "09. SEPTIEMBRE", "10. OCTUBRE", "11. NOVIEMBRE", "12. DICIEMBRE"]
+_MES_ACTUAL = _MESES[date.today().month - 1]
+RUTA_INV_ERP = ARCHIVOS_DIARIOS / "INFORMES" / "INVENTARIO GENERAL ACTUALIZADO" / _MES_ACTUAL
+
+# Ruta de REMISIONES (con carpeta de mes dinámica)
+_MESES_REMISIONES = ["1. ENERO", "2. FEBRERO", "3. MARZO", "4. ABRIL", "5.MAYO", "6. JUNIO",
+                     "7. JULIO", "8. AGOSTO", "9. SEPTIEMBRE", "10. OCTUBRE", "11. NOVIEMBRE", "12. DICIEMBRE"]
+_MES_REMISIONES = _MESES_REMISIONES[date.today().month - 1]
+RUTA_REMISIONES = Path(r"D:\Fertrac\Usuarios\infocompras\$CARPETA COMPRAS 2026\REMISIONES") / _MES_REMISIONES
+
+# Ruta donde están los valorizados
+RUTA_VALORIZADOS = ARCHIVOS_DIARIOS / "Pruebas Inv General" / "Valorizados"
+
+# Ruta de salida para el archivo generado
+OUTPUT_PATH = ARCHIVOS_DIARIOS / "Pruebas Inv General"
+
+# BASE_PATH para archivos principales (Matriz USD, Marcas, Distribución, Inventario General base)
+BASE_PATH = ARCHIVOS_DIARIOS
 
 
-PASS_INV = "Compras2027"
-PASSWORDS_TRY = ["Compras2026", "Compras2027"]
+PASS_INV = "Compras2028"
+PASSWORDS_TRY = ["Compras2027", "Compras2028"]
 
 OUTPUT_BASENAME = "$2026 INVENTARIO GENERAL ACTUALIZADO"
 APPLY_PASSWORD_TO_OUTPUT = True
@@ -119,17 +134,15 @@ COLS_DESDE_ORIGINAL = ["MARCA copia", "INV BODEGA GERENCIA", "LINEA COPIA", "SUB
 EMAIL_CONFIG = {
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,  # Usado solo en método 2 (fallback)
-    "sender_email": "analista_automatizacion@fertrac.com",
-    "sender_password": "ssrz ldin nvyx ixry",  # ← Contraseña de aplicación de Google
+    "sender_email": "data_science@fertrac.com",
+    "sender_password": "jprm cfec elhh fvfn",  # ← Contraseña de aplicación de Google
     "recipient_emails": [
         "analista_automatizacion@fertrac.com",
         "data_science@fertrac.com",
         "asistentecompras@fertrac.com",   
-        "analistacompras5@fertrac.com",
-   
-        
+        "analistacompras5@fertrac.com",        
     ],
-    "enabled": False  # Cambiar a False para desactivar correos
+    "enabled": True  # Cambiar a False para desactivar correos
 }
 
 
@@ -382,9 +395,56 @@ try:
 except Exception:
     HAS_COM = False
 
+# ============== SISTEMA DE LOGGING A ARCHIVO ==============
+
+def _inicializar_log() -> Path:
+    """
+    Crea la carpeta de logs y el archivo de log para esta ejecución.
+    Formato: logs/ejecucion_YYYY_DIA_HHMMSS.log
+    Retorna el Path del archivo de log creado.
+    """
+    try:
+        # Carpeta logs junto al script
+        script_dir = Path(__file__).parent
+        logs_dir   = script_dir / "logs"
+        logs_dir.mkdir(exist_ok=True)
+
+        # Nombre del archivo: mismo formato que los otros scripts del flujo
+        ahora      = datetime.now()
+        dia_semana = ["lun", "mar", "mie", "jue", "vie", "sab", "dom"][ahora.weekday()]
+        nombre     = f"ejecucion_{ahora.year}. {dia_semana}_{ahora.strftime('%H%M%S')}.log"
+        log_path   = logs_dir / nombre
+
+        # Encabezado inicial
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("=============================================\n")
+            f.write("INICIO DE EJECUCION - ACTUALIZAR INV GENERAL\n")
+            f.write("=============================================\n")
+            f.write(f"[{ahora.strftime('%H:%M:%S')}] Script iniciado\n")
+            f.write(f"[{ahora.strftime('%H:%M:%S')}] Archivo de log: {log_path}\n\n")
+
+        return log_path
+
+    except Exception as e:
+        print(f"[ADVERTENCIA] No se pudo crear archivo de log: {e}")
+        return None
+
+
+# Variable global — se asigna al inicio de main()
+_LOG_FILE = None
+
+
 def log(msg):
     safe = msg.encode("ascii", "ignore").decode()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {safe}")
+    linea = f"[{datetime.now().strftime('%H:%M:%S')}] {safe}"
+    print(linea)
+    # Escribir también al archivo de log si está configurado
+    if _LOG_FILE:
+        try:
+            with open(_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(linea + "\n")
+        except Exception:
+            pass  # Si falla el log, no interrumpir el proceso
 
 # Cache para normalización
 _NORM_CACHE = {}
@@ -1849,18 +1909,42 @@ def cargar_distribucion(base_dir: Path) -> dict:
         log(traceback.format_exc())
         return {'gestor': {}, 'clasificacion': {}}
     
-def cargar_consolidado_remisiones(base_dir: Path) -> pd.DataFrame:
+def cargar_consolidado_remisiones() -> pd.DataFrame:
     """
-    Carga el archivo CONSOLIDADO REMISIONES 2019-2026, hojas RM y RMC.
+    Carga el archivo CONSOLIDADO REMISIONES más reciente de la carpeta RUTA_REMISIONES.
+    Busca en la carpeta del mes actual el archivo con fecha de modificación más cercana a hoy.
     Retorna REFERENCIA, CANT RM y CANT RMC desde tablas dinámicas.
     """
     archivo_trabajo = None
     es_copia_temporal = False
     
     try:
-        # 1. Buscar archivo usando la constante global
-        p = find_by_prefix(base_dir, PFX_CONSOLIDADO_REMISIONES)  # ✅ Usa la constante
-        log(f"Archivo encontrado: {p.name}")
+        # 1. Buscar en RUTA_REMISIONES el archivo más reciente
+        carpeta_remisiones = RUTA_REMISIONES
+        log(f"Buscando archivos de remisiones en: {carpeta_remisiones}")
+        
+        if not carpeta_remisiones.exists():
+            raise FileNotFoundError(f"No existe la carpeta: {carpeta_remisiones}")
+        
+        # Buscar archivos que contengan "CONSOLIDADO" y "REMISIONES"
+        archivos_encontrados = []
+        for archivo in carpeta_remisiones.glob("*.xlsx"):
+            # Ignorar archivos temporales de Excel
+            if archivo.name.startswith("~$"):
+                continue
+            nombre_upper = archivo.name.upper()
+            if "REMISIONES" in nombre_upper and "CONSOLIDADO" in nombre_upper:
+                fecha_mod = archivo.stat().st_mtime
+                archivos_encontrados.append((archivo, fecha_mod))
+                log(f"  → Encontrado: {archivo.name} (modificado: {datetime.fromtimestamp(fecha_mod).strftime('%d/%m/%Y %H:%M')})")
+        
+        if not archivos_encontrados:
+            raise FileNotFoundError(f"No se encontró archivo de CONSOLIDADO REMISIONES en {carpeta_remisiones}")
+        
+        # Ordenar por fecha de modificación (más reciente primero)
+        archivos_encontrados.sort(key=lambda x: x[1], reverse=True)
+        p = archivos_encontrados[0][0]
+        log(f"✅ Archivo seleccionado (más reciente): {p.name}")
         
         # 2. Obtener archivo de trabajo
         archivo_trabajo, es_copia_temporal = obtener_archivo_trabajo(
@@ -1925,8 +2009,8 @@ def cargar_consolidado_remisiones(base_dir: Path) -> pd.DataFrame:
         
         return out
         
-    except FileNotFoundError:
-            log(f"⚠ ADVERTENCIA: No se encontró el archivo '{PFX_CONSOLIDADO_REMISIONES}'.")
+    except FileNotFoundError as e:
+            log(f"⚠ ADVERTENCIA: {e}")
             limpiar_archivo_temporal(archivo_trabajo, es_copia_temporal)
             return pd.DataFrame(columns=["__REF_CONSOL__", "__CANT_RM__", "__CANT_RMC__"])
         
@@ -3858,6 +3942,10 @@ def convertir_texto_a_numero_columnas_inv_lista(wb, excel):
 # ==== PROCESO PRINCIPAL ====
 def main():
 
+    # CAMBIO: inicializar log a archivo antes de cualquier otra cosa
+    global _LOG_FILE
+    _LOG_FILE = _inicializar_log()
+
     proceso_exitoso = False
     archivo_generado = None
     estadisticas = {}
@@ -3873,16 +3961,17 @@ def main():
         # 1) Cargar datos externos
         log("Cargando datos externos...")
 
-        df_src = cargar_inventario_actualizado(BASE_PATH)
+        # Cargar inventario del ERP (desde carpeta del mes)
+        df_src = cargar_inventario_actualizado(RUTA_INV_ERP)
 
-        # Valorizados
-        df_val_gen   = cargar_valorizado(BASE_PATH, PFX_VAL_GENERAL)
-        df_val_impo  = cargar_valorizado(BASE_PATH, PFX_VAL_FALT_IMPO)
+        # Valorizados (desde carpeta de valorizados)
+        df_val_gen   = cargar_valorizado(RUTA_VALORIZADOS, PFX_VAL_GENERAL)
+        df_val_impo  = cargar_valorizado(RUTA_VALORIZADOS, PFX_VAL_FALT_IMPO)
         
         # FIX: Buscar VALORIZADO FALTANTES sin IMPO
         log("Buscando VALORIZADO FALTANTES (excluyendo IMPO)...")
         archivo_faltantes = None
-        for f in BASE_PATH.iterdir():
+        for f in RUTA_VALORIZADOS.iterdir():
             if f.is_file() and f.suffix.lower() in ('.xlsx', '.xlsm'):
                 nombre_sin_simbolos = _strip_dol_tmp(f.name)
                 nombre_normalizado = _norm(nombre_sin_simbolos)
@@ -3890,7 +3979,7 @@ def main():
                 # Debe ser exactamente "VALORIZADO FALTANTES" (sin IMPO)
                 if nombre_normalizado == _norm("VALORIZADO FALTANTES"):
                     archivo_faltantes = f
-                    log(f"  → Encontrado: {f.name}")
+                    log(f"  → Encontrado: {f.name} en {RUTA_VALORIZADOS}")
                     break
 
         if archivo_faltantes:
@@ -3899,7 +3988,7 @@ def main():
             log(f"  ⚠️ No encontrado, usando vacío")
             df_val_falt = pd.DataFrame(columns=["__REF_INT__", "__CANT__"])
 
-        df_val_tob   = cargar_valorizado(BASE_PATH, PFX_VAL_TOBERIN)
+        df_val_tob   = cargar_valorizado(RUTA_VALORIZADOS, PFX_VAL_TOBERIN)
         
         # Cargar Matriz USD
         df_matriz_usd = cargar_matriz_usd(BASE_PATH)
@@ -3919,8 +4008,8 @@ def main():
         distribucion = cargar_distribucion(BASE_PATH)
         log(f"Distribución: {len(distribucion['gestor'])} gestores, {len(distribucion['clasificacion'])} clasificaciones")
 
-        # CARGAR CONSOLIDADO REMISIONES
-        df_consolidado = cargar_consolidado_remisiones(BASE_PATH)
+        # CARGAR CONSOLIDADO REMISIONES (desde RUTA_REMISIONES)
+        df_consolidado = cargar_consolidado_remisiones()
 
         # Crear mapas separados para RM y RMC
         rm_map = df_consolidado.set_index("__REF_CONSOL__")["__CANT_RM__"].to_dict() if len(df_consolidado) > 0 else {}
@@ -5771,9 +5860,10 @@ def main():
         except NameError:
             base_name = f"{Path(PATRON_INV_FILE).stem} (ACTUALIZADO)"
         out_name = f"{base_name} {datetime.now():%Y%m%d_%H%M}.xlsx"
-        out_path = BASE_PATH / out_name
+        out_path = OUTPUT_PATH / out_name
 
         log(f"Guardando archivo (sin ordenar): {out_name}")
+        log(f"Ruta completa: {out_path}")
         apply_pw = saveinfo.get("reapply_password")
         if apply_pw:
             wb.SaveAs(str(out_path), FileFormat=51, Password=apply_pw)
@@ -6559,6 +6649,16 @@ def main():
         log("\n" + "="*70)
         log("FIN DEL PROCESO")
         log("="*70)
+
+        # Escribir pie del log
+        if _LOG_FILE:
+            try:
+                with open(_LOG_FILE, "a", encoding="utf-8") as f:
+                    f.write("=============================================\n")
+                    f.write(f"FIN DE EJECUCION - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n")
+                    f.write("=============================================\n")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
