@@ -15,6 +15,17 @@ CAMBIOS v2:
 - Reintento automático de login si la URL no cambia
 - implicitly_wait removido (mezclaba mal con WebDriverWait)
 - time.sleep() fijos reemplazados por WebDriverWait en puntos críticos
+
+CAMBIOS v3:
+- webdriver-manager: sincroniza automáticamente ChromeDriver con la versión
+  de Chrome instalada (evita el error DevToolsActivePort en tareas programadas)
+- verificar_versiones_chrome(): imprime versiones de Chrome y ChromeDriver
+  al inicio para facilitar diagnóstico
+- Limpieza de directorios temporales entre reintentos fallidos
+- Flags adicionales para entornos sin sesión de escritorio activa:
+    --remote-debugging-port=0, --disable-background-networking,
+    --disable-default-apps, --disable-sync, --metrics-recording-only
+- MODO_TEST: variable para simular entorno de tarea programada localmente
 """
 
 from selenium import webdriver
@@ -22,6 +33,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import Select
@@ -33,6 +46,7 @@ import re
 import glob
 import shutil
 import tempfile
+import subprocess
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -53,10 +67,28 @@ URL_LOGIN      = "https://erp.fertrac.com/web/login"
 URL_INVENTARIO = "https://erp.fertrac.com/web#action=246&model=stock.picking.type&view_type=kanban&menu_id=174"
 URL_PRODUCTOS  = "https://erp.fertrac.com/web#action=278&model=product.template&view_type=kanban&menu_id=174"
 
-RUTA_BASE = r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026\INFORMES\INVENTARIO GENERAL ACTUALIZADO"
+# prod
+# RUTA_BASE = r"D:\Fertrac\Usuarios\infocompras\ARCHIVOS DIARIOS 2026\INFORMES\INVENTARIO GENERAL ACTUALIZADO"
+# dev lau
+RUTA_BASE = r"C:\Users\lmartinez\Documents\6. MACROS PARA COMPRAS\2. ARCHIVO INVENTARIO GENERAL\PRUEBAS DESARROLLO"
+# dev yuli
+
 
 # CAMBIO: headless=True para entorno servidor Windows sin pantalla
 MODO_HEADLESS        = True
+
+# CAMBIO v5: webdriver-manager con caché local en la carpeta del script.
+# - Si ya tiene el driver correcto en caché → lo usa directamente, sin red.
+# - Si Chrome se actualizó → descarga solo el driver nuevo y lo guarda en caché.
+# - La carpeta de caché es local al script, no depende de rutas del sistema.
+# Esto resuelve tanto el timeout de red nocturno (v4) como el problema de
+# versiones desactualizadas cuando Chrome se auto-actualiza en el servidor.
+DRIVER_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".wdm_cache")
+os.makedirs(DRIVER_CACHE_DIR, exist_ok=True)
+
+# MODO_TEST: ponlo en True para simular tarea programada desde tu sesión normal
+# Corre el script desde cmd.exe (no doble click) con: python descargar_inventario_general.py
+MODO_TEST            = True
 TIMEOUT_CARGA_MAXIMA = 3600  # 60 minutos
 
 # ============== CONFIGURACION DE EMAIL ==============
@@ -64,7 +96,7 @@ EMAIL_CONFIG = {
     "smtp_server": "smtp.gmail.com",
     "smtp_port": 587,
     "sender_email": "data_science@fertrac.com",
-    "sender_password": "jprm cfec elhh fvfn",
+    "sender_password": "gzig lupe khin ojfa",
     "recipient_emails": [
         "analista_automatizacion@fertrac.com",
         "data_science@fertrac.com",
@@ -96,6 +128,46 @@ def crear_carpeta_mes():
     return ruta_completa
 
 
+def verificar_versiones_chrome():
+    """
+    Imprime las versiones de Chrome y ChromeDriver instalados.
+    Útil para diagnosticar incompatibilidades (causa más común del error
+    DevToolsActivePort en tareas programadas).
+    """
+    print("[*] Verificando versiones de Chrome y ChromeDriver...")
+    try:
+        result = subprocess.run(
+            ["reg", "query",
+             r"HKLM\SOFTWARE\Google\Chrome\BLBeacon", "/v", "version"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            version_chrome = result.stdout.strip().split()[-1]
+        else:
+            # Intento alternativo para Chrome en modo usuario
+            result2 = subprocess.run(
+                ["reg", "query",
+                 r"HKCU\SOFTWARE\Google\Chrome\BLBeacon", "/v", "version"],
+                capture_output=True, text=True, timeout=5
+            )
+            version_chrome = result2.stdout.strip().split()[-1] if result2.returncode == 0 else "no encontrada"
+        print(f"[*]   Chrome instalado : {version_chrome}")
+    except Exception as e:
+        print(f"[!]   No se pudo leer versión de Chrome: {e}")
+
+    try:
+        result = subprocess.run(
+            ["chromedriver", "--version"],
+            capture_output=True, text=True, timeout=5
+        )
+        version_driver = result.stdout.strip() if result.returncode == 0 else "no encontrado en PATH"
+        print(f"[*]   ChromeDriver     : {version_driver}")
+    except Exception as e:
+        print(f"[!]   No se pudo leer versión de ChromeDriver: {e}")
+
+    print(f"[*]   NOTA: webdriver-manager usará caché en: {DRIVER_CACHE_DIR}")
+
+
 # ============== CONFIGURACION DEL DRIVER ==============
 
 def _crear_opciones_chrome(carpeta_descarga):
@@ -116,36 +188,72 @@ def _crear_opciones_chrome(carpeta_descarga):
         chrome_options.add_argument("--window-size=1920,1080")
         print("[*] Modo sin ventana activado")
 
+    # Flags base
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--ignore-certificate-errors")
     chrome_options.add_argument("--disable-extensions")
 
-    # CAMBIO: directorio temporal único por ejecución para evitar conflictos
-    temp_dir = tempfile.mkdtemp()
+    # CAMBIO v3: flags adicionales para entornos sin sesión de escritorio
+    # (necesarios cuando Chrome corre bajo tarea programada o servicio de Windows)
+    chrome_options.add_argument("--remote-debugging-port=0")      # puerto dinámico, evita conflictos
+    chrome_options.add_argument("--disable-background-networking")
+    chrome_options.add_argument("--disable-default-apps")
+    chrome_options.add_argument("--disable-sync")
+    chrome_options.add_argument("--metrics-recording-only")
+    chrome_options.add_argument("--mute-audio")
+    chrome_options.add_argument("--no-first-run")
+
+    # CAMBIO v2: directorio temporal único por ejecución para evitar conflictos
+    temp_dir = tempfile.mkdtemp(prefix="chrome_fertrac_")
     chrome_options.add_argument(f"--user-data-dir={temp_dir}")
 
-    return chrome_options
+    return chrome_options, temp_dir
 
 
-def configurar_driver(carpeta_descarga, max_intentos=3):
+def configurar_driver(carpeta_descarga, max_intentos=5):
     """
     Configura el driver de Chrome con reintentos.
-    CAMBIO PRINCIPAL: si Chrome no arranca (DevToolsActivePort), reintenta
-    hasta max_intentos veces esperando entre cada uno.
+
+    CAMBIOS v5:
+    - webdriver-manager con caché local (DRIVER_CACHE_DIR).
+      Si el driver ya está en caché y coincide con la versión de Chrome → lo usa
+      sin tocar la red. Si Chrome se actualizó → descarga solo el driver nuevo.
+      Resuelve tanto el timeout nocturno (v4) como el problema de versiones
+      desactualizadas cuando Chrome se auto-actualiza en el servidor.
+    - Limpia el directorio temporal de intentos fallidos antes de reintentar.
     """
     print("[*] Configurando Chrome Driver...")
+
+    temp_dirs_creados = []
 
     for intento in range(1, max_intentos + 1):
         try:
             if intento > 1:
                 print(f"[*] Reintentando arranque de Chrome (intento {intento}/{max_intentos})...")
-                # Espera entre intentos: da tiempo al servidor a liberar recursos
-                time.sleep(10)
+                for d in temp_dirs_creados:
+                    try:
+                        shutil.rmtree(d, ignore_errors=True)
+                    except Exception:
+                        pass
+                temp_dirs_creados.clear()
+                time.sleep(30)
 
-            chrome_options = _crear_opciones_chrome(carpeta_descarga)
-            driver = webdriver.Chrome(options=chrome_options)
+            chrome_options, temp_dir = _crear_opciones_chrome(carpeta_descarga)
+            temp_dirs_creados.append(temp_dir)
+
+            # CAMBIO v5: webdriver-manager con caché local.
+            # - WDM_CACHE_PATH apunta a la carpeta del script (.wdm_cache/).
+            # - WDM_LOCAL=1 fuerza que la caché sea local, no en AppData.
+            # - Si el driver ya está descargado y es compatible → no hay red.
+            # - Si Chrome se actualizó → descarga solo el driver nuevo.
+            os.environ["WDM_CACHE_PATH"] = DRIVER_CACHE_DIR
+            os.environ["WDM_LOCAL"] = "1"
+            driver_path = ChromeDriverManager().install()
+            print(f"[*] ChromeDriver en uso: {driver_path}")
+            service = Service(driver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
 
             # Timeouts más largos porque esta descarga puede demorar mucho
             driver.set_page_load_timeout(300)
@@ -161,6 +269,9 @@ def configurar_driver(carpeta_descarga, max_intentos=3):
         except Exception as e:
             print(f"[!] Error arrancando Chrome en intento {intento}: {str(e)}")
             if intento == max_intentos:
+                # Limpiar todos los temp dirs antes de lanzar la excepción
+                for d in temp_dirs_creados:
+                    shutil.rmtree(d, ignore_errors=True)
                 raise Exception(
                     f"Chrome no pudo arrancar después de {max_intentos} intentos. "
                     f"Último error: {str(e)}"
@@ -1062,6 +1173,23 @@ def main():
         print(f"Fecha y hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print(f"Usuario: {USUARIO}")
         print("-" * 70)
+
+        # CAMBIO v3: verificar versiones siempre al inicio para facilitar diagnóstico
+        verificar_versiones_chrome()
+        print("-" * 70)
+
+        # CAMBIO v3: MODO_TEST simula entorno de tarea programada desde sesión normal.
+        # Instrucciones para probar sin esperar las 5am:
+        #   1. Pon MODO_TEST = True al inicio del script
+        #   2. Abre cmd.exe como el MISMO USUARIO que usa la tarea programada
+        #   3. Corre:  python descargar_inventario_general.py
+        #   4. Si falla aquí pero no con doble clic, el problema es de permisos/sesión
+        if MODO_TEST:
+            print("[TEST] Modo test activo: simulando entorno de tarea programada")
+            print(f"[TEST] Usuario del proceso : {os.environ.get('USERNAME', 'desconocido')}")
+            print(f"[TEST] TEMP dir            : {tempfile.gettempdir()}")
+            print(f"[TEST] Directorio actual   : {os.getcwd()}")
+            print("-" * 70)
 
         carpeta_descarga = crear_carpeta_mes()
         print(f"Carpeta de descarga: {carpeta_descarga}")
